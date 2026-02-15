@@ -56,15 +56,50 @@ export function StressTest() {
     if (!formName.trim()) return;
 
     // Compute portfolio impact from position weights and shocks
-    const equityWeight = pf.allocationByClass
-      .filter(a => a.name === 'Equity' || a.name === 'Option')
-      .reduce((s, a) => s + a.value, 0) / 100;
-    const bondWeight = pf.allocationByClass
-      .filter(a => a.name.includes('Bond'))
-      .reduce((s, a) => s + a.value, 0) / 100;
-    const commodityWeight = pf.allocationByClass
-      .filter(a => a.name.includes('Commodity'))
-      .reduce((s, a) => s + a.value, 0) / 100;
+    // Use allocationByClass if available, otherwise compute from positions directly
+    let equityWeight = 0;
+    let bondWeight = 0;
+    let commodityWeight = 0;
+
+    if (pf.allocationByClass.length > 0) {
+      equityWeight = pf.allocationByClass
+        .filter(a => {
+          const n = a.name.toLowerCase();
+          return n.includes('equity') || n.includes('stock') || n.includes('option') || n === 'etf';
+        })
+        .reduce((s, a) => s + a.value, 0) / 100;
+      bondWeight = pf.allocationByClass
+        .filter(a => {
+          const n = a.name.toLowerCase();
+          return n.includes('bond') || n.includes('fixed income');
+        })
+        .reduce((s, a) => s + a.value, 0) / 100;
+      commodityWeight = pf.allocationByClass
+        .filter(a => {
+          const n = a.name.toLowerCase();
+          return n.includes('commodity') || n.includes('gold') || n.includes('oil');
+        })
+        .reduce((s, a) => s + a.value, 0) / 100;
+    }
+
+    // If no allocations matched, derive from positions asset classes directly
+    if (equityWeight === 0 && bondWeight === 0 && commodityWeight === 0 && pf.positions.length > 0) {
+      const totalVal = pf.positions.reduce((s, p) => s + p.quantity * p.currentPrice, 0);
+      if (totalVal > 0) {
+        pf.positions.forEach(p => {
+          const w = (p.quantity * p.currentPrice) / totalVal;
+          const ac = p.assetClass.toLowerCase();
+          if (ac.includes('bond') || ac.includes('fixed')) bondWeight += w;
+          else if (ac.includes('commodity') || ac.includes('gold') || ac.includes('oil')) commodityWeight += w;
+          else equityWeight += w;  // Default to equity for stocks, ETFs, options, etc.
+        });
+      }
+    }
+
+    // If still all zero (e.g. single equities), default to 100% equity
+    if (equityWeight === 0 && bondWeight === 0 && commodityWeight === 0) {
+      equityWeight = 1;
+    }
 
     const portfolioImpact = parseFloat((
       equityWeight * formEquityShock +
@@ -103,8 +138,10 @@ export function StressTest() {
       worstPositionImpact: parseFloat(worstImpact.toFixed(1)),
     });
 
-    // Select the newly created one
-    setSelectedScenario(pf.stressScenarios.length);
+    // Select the newly created one (will be at the end after state update)
+    // Use setTimeout to let React state update first
+    const newIdx = pf.stressScenarios.length; // current length = index of new item after add
+    setTimeout(() => setSelectedScenario(newIdx), 0);
 
     // Reset
     setFormName('');

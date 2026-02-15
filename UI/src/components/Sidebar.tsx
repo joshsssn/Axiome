@@ -57,7 +57,12 @@ export function Sidebar({ currentPage, onNavigate, collapsed, onToggle }: Sideba
       {/* Navigation */}
       <nav className="flex-1 py-4 px-2 space-y-0.5 overflow-y-auto">
         {sections.map(section => {
-          const items = navItems.filter(i => i.section === section);
+          const items = navItems.filter(i => {
+            if (i.section !== section) return false;
+            // Hide admin page for non-admin users
+            if (i.id === 'admin' && user?.role !== 'admin') return false;
+            return true;
+          });
           return (
             <div key={section} className="mb-2">
               {!collapsed && (

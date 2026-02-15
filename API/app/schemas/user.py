@@ -7,6 +7,9 @@ class UserBase(BaseModel):
     is_active: Optional[bool] = True
     role: str = "user"
     username: Optional[str] = None
+    display_name: Optional[str] = None
+    organization: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 # Properties to receive via API on creation
 class UserCreate(UserBase):

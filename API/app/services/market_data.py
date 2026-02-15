@@ -1,8 +1,47 @@
 import yfinance as yf
+import time
+import logging
 from datetime import date, datetime, timedelta
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.models.instrument import Instrument, PriceHistory
+
+logger = logging.getLogger(__name__)
+
+# ---------- Simple in-process rate-limiter / cache ----------
+_last_yf_call: float = 0.0
+_YF_MIN_INTERVAL = 0.35  # seconds between Yahoo Finance API calls
+_price_cache: Dict[str, Any] = {}  # key -> (timestamp, value)
+_CACHE_TTL = 300  # 5 minutes
+
+
+def _rate_limit():
+    """Enforce minimum interval between yfinance calls to avoid 429."""
+    global _last_yf_call
+    elapsed = time.time() - _last_yf_call
+    if elapsed < _YF_MIN_INTERVAL:
+        time.sleep(_YF_MIN_INTERVAL - elapsed)
+    _last_yf_call = time.time()
+
+
+def _cache_get(key: str) -> Any:
+    """Get value from in-memory cache if not expired."""
+    entry = _price_cache.get(key)
+    if entry and (time.time() - entry[0]) < _CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def _cache_set(key: str, value: Any):
+    """Store value in in-memory cache."""
+    _price_cache[key] = (time.time(), value)
+    # Evict old entries periodically
+    if len(_price_cache) > 500:
+        cutoff = time.time() - _CACHE_TTL
+        expired = [k for k, v in _price_cache.items() if v[0] < cutoff]
+        for k in expired:
+            del _price_cache[k]
 
 # Common stocks metadata fallback for when yfinance .info is rate-limited
 _KNOWN_META: Dict[str, Dict[str, str]] = {
@@ -50,6 +89,31 @@ _KNOWN_META: Dict[str, Dict[str, str]] = {
     "^GSPC": {"name": "S&P 500 Index", "sector": "Index", "country": "US", "currency": "USD", "asset_class": "Index"},
     "^DJI": {"name": "Dow Jones Industrial", "sector": "Index", "country": "US", "currency": "USD", "asset_class": "Index"},
     "^IXIC": {"name": "NASDAQ Composite", "sector": "Index", "country": "US", "currency": "USD", "asset_class": "Index"},
+    # Additional common tickers
+    "COR": {"name": "Cencora Inc.", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "AVGO": {"name": "Broadcom Inc.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "LLY": {"name": "Eli Lilly and Co.", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "ABBV": {"name": "AbbVie Inc.", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "MRK": {"name": "Merck & Co.", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "PFE": {"name": "Pfizer Inc.", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "ORCL": {"name": "Oracle Corp.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "ACN": {"name": "Accenture plc", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "TMO": {"name": "Thermo Fisher Scientific", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "ABT": {"name": "Abbott Laboratories", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "CVX": {"name": "Chevron Corp.", "sector": "Energy", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "MCD": {"name": "McDonald's Corp.", "sector": "Consumer Discretionary", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "NKE": {"name": "Nike Inc.", "sector": "Consumer Discretionary", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "QCOM": {"name": "Qualcomm Inc.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "TXN": {"name": "Texas Instruments", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "IBM": {"name": "IBM Corp.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "PYPL": {"name": "PayPal Holdings", "sector": "Financials", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "UBER": {"name": "Uber Technologies", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "SQ": {"name": "Block Inc.", "sector": "Financials", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "COIN": {"name": "Coinbase Global", "sector": "Financials", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "PLTR": {"name": "Palantir Technologies", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "SNOW": {"name": "Snowflake Inc.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
+    "^TNX": {"name": "10-Year Treasury Yield", "sector": "Fixed Income", "country": "US", "currency": "USD", "asset_class": "Index"},
+    "^VIX": {"name": "CBOE Volatility Index", "sector": "Volatility", "country": "US", "currency": "USD", "asset_class": "Index"},
 }
 
 class MarketDataService:
@@ -58,25 +122,47 @@ class MarketDataService:
 
     def get_instrument_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
-        Fetch instrument metadata from yfinance.
+        Fetch instrument metadata from yfinance with rate-limiting and caching.
         """
-        try:
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            
-            # Map yfinance info to our model
-            return {
-                "symbol": symbol,
-                "name": info.get("longName") or info.get("shortName"),
-                "asset_class": info.get("quoteType", "Equity"), # simplified
-                "sector": info.get("sector"),
-                "country": info.get("country"),
-                "currency": info.get("currency"),
-                "current_price": info.get("currentPrice") or info.get("regularMarketPrice")
-            }
-        except Exception as e:
-            print(f"Error fetching info for {symbol}: {e}")
-            return None
+        cache_key = f"info:{symbol}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        for attempt in range(3):
+            try:
+                _rate_limit()
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+
+                # Map yfinance info to our model
+                result = {
+                    "symbol": symbol,
+                    "name": info.get("longName") or info.get("shortName"),
+                    "asset_class": info.get("quoteType", "Equity"),
+                    "sector": info.get("sector"),
+                    "country": info.get("country"),
+                    "currency": info.get("currency"),
+                    "current_price": info.get("currentPrice") or info.get("regularMarketPrice")
+                }
+                _cache_set(cache_key, result)
+                return result
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "429" in err_msg or "too many requests" in err_msg:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"Rate limited on {symbol}, retrying in {wait}s (attempt {attempt + 1}/3)")
+                    time.sleep(wait)
+                    continue
+                elif "404" in err_msg or "not found" in err_msg:
+                    logger.warning(f"Ticker {symbol} not found (404), using fallback metadata")
+                    break
+                else:
+                    logger.error(f"Error fetching info for {symbol}: {e}")
+                    break
+
+        # Return None – caller will use _KNOWN_META fallback
+        return None
 
     def sync_instrument(self, symbol: str) -> Optional[Instrument]:
         """
@@ -125,15 +211,33 @@ class MarketDataService:
                         setattr(instrument, key, value)
                 instrument.last_updated = date.today()
             
-            self.db.commit()
-            self.db.refresh(instrument)
+            try:
+                self.db.commit()
+                self.db.refresh(instrument)
+            except IntegrityError:
+                self.db.rollback()
+                # Re-fetch in case another request created it
+                instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
+            except Exception as e:
+                self.db.rollback()
+                logger.error(f"Error syncing instrument {symbol}: {e}")
+                instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
             
         return instrument
 
+    def get_price_at(self, symbol: str, target_date: date) -> Optional[float]:
+        """Get the closing price on or before target_date (up to 7 day lookback for weekends/holidays)."""
+        start = target_date - timedelta(days=7)
+        history = self.get_price_history(symbol, start, target_date)
+        if not history:
+            return None
+        # Return the latest record's closing price
+        last = history[-1]
+        return last.adjusted_close or last.close
+
     def get_price_history(self, symbol: str, start_date: date, end_date: date = date.today()) -> List[PriceHistory]:
         """
-        Get historical data, fetching from YF if missing in DB.
-        This is a simplified implementation. A robust one would check for gaps.
+        Get historical data, fetching from YF if missing or incomplete in DB.
         """
         # Check DB first
         history = self.db.query(PriceHistory).filter(
@@ -142,31 +246,105 @@ class MarketDataService:
             PriceHistory.date <= end_date
         ).order_by(PriceHistory.date).all()
         
+        fetch_start = None
+        
         if not history:
-            # Fetch from YF
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(start=start_date, end=end_date + timedelta(days=1))
-            
-            if df.empty:
-                return []
-            
-            new_records = []
-            for index, row in df.iterrows():
-                # index is Timestamp
+            fetch_start = start_date
+            # Ensure instrument record exists BEFORE inserting price history (FK constraint)
+            instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
+            if not instrument:
+                try:
+                    self.sync_instrument(symbol)
+                except Exception:
+                    # Create a minimal instrument row so price history can be inserted
+                    known = _KNOWN_META.get(symbol, {})
+                    instrument = Instrument(
+                        symbol=symbol,
+                        name=known.get("name", symbol),
+                        asset_class=known.get("asset_class", "Equity"),
+                        sector=known.get("sector"),
+                        country=known.get("country", "US"),
+                        currency=known.get("currency", "USD"),
+                        last_updated=date.today(),
+                    )
+                    self.db.add(instrument)
+                    try:
+                        self.db.commit()
+                    except IntegrityError:
+                        self.db.rollback()  # Already exists (race condition)
+        else:
+            # Check for coverage gap at the end
+            last_db_date = history[-1].date
+            # Only fetch if we have a gap AND the gap is in the past (don't fetch future)
+            if last_db_date < end_date and last_db_date < date.today():
+                fetch_start = last_db_date + timedelta(days=1)
+            else:
+                return history
+
+        # Fetch from YF with rate-limiting and retry
+        df = None
+        for attempt in range(3):
+            try:
+                _rate_limit()
+                ticker = yf.Ticker(symbol)
+                # Fetch up to today to ensure we catch everything if end_date is in future
+                target_end = min(end_date, date.today()) + timedelta(days=1)
+                df = ticker.history(start=fetch_start, end=target_end)
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "429" in err_msg or "too many requests" in err_msg:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"Rate limited fetching history for {symbol}, retrying in {wait}s")
+                    time.sleep(wait)
+                    continue
+                elif "404" in err_msg or "not found" in err_msg:
+                    logger.warning(f"No price data for {symbol} (404)")
+                    return history if history else []
+                else:
+                    logger.error(f"Error fetching history for {symbol}: {e}")
+                    return history if history else []
+
+        if df is None or df.empty:
+            return history if history else []
+
+        new_records = []
+        existing_dates = {h.date for h in history} if history else set()
+
+        for index, row in df.iterrows():
+            d = index.date()
+            if d in existing_dates:
+                continue
+                
+            try:
                 record = PriceHistory(
                     instrument_symbol=symbol,
-                    date=index.date(),
-                    open=row['Open'],
-                    high=row['High'],
-                    low=row['Low'],
-                    close=row['Close'],
-                    volume=row['Volume'],
-                    adjusted_close=row['Close'] # user might want standard close
+                    date=d,
+                    open=float(row['Open']) if row['Open'] is not None else None,
+                    high=float(row['High']) if row['High'] is not None else None,
+                    low=float(row['Low']) if row['Low'] is not None else None,
+                    close=float(row['Close']) if row['Close'] is not None else None,
+                    volume=float(row['Volume']) if row['Volume'] is not None else None,
+                    adjusted_close=float(row['Close']) if row['Close'] is not None else None,
                 )
                 self.db.add(record)
                 new_records.append(record)
-            
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Skipping bad row for {symbol} on {index}: {e}")
+                continue
+
+        try:
             self.db.commit()
-            return new_records
-            
-        return history
+            # If we appended new records, sort valid history again or just append
+            full_history = history + new_records
+            full_history.sort(key=lambda x: x.date)
+            return full_history
+        except IntegrityError:
+            self.db.rollback()
+            logger.warning(f"IntegrityError inserting history for {symbol}, returning DB data")
+            return self.db.query(PriceHistory).filter(
+                PriceHistory.instrument_symbol == symbol,
+                PriceHistory.date >= start_date,
+                PriceHistory.date <= end_date
+            ).order_by(PriceHistory.date).all()
+

@@ -1,13 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { type User } from '@/data/mockData';
 import { api } from '@/services/api';
-import { UserPlus, Shield, User as UserIcon, Search, MoreHorizontal } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { UserPlus, Shield, User as UserIcon, Search, Trash2, Check, X } from 'lucide-react';
 
 export function Admin() {
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [userList, setUserList] = useState<User[]>([]);
   const [newUser, setNewUser] = useState({ username: '', email: '', role: 'user', password: '' });
+  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const { user: authUser } = useAuth();
 
   // Fetch real users
   const fetchUsers = useCallback(async () => {
@@ -44,6 +47,16 @@ export function Admin() {
       fetchUsers();
     } catch (e) {
       console.error('Create user failed', e);
+    }
+  };
+
+  const handleDeleteUser = async (userId: number) => {
+    try {
+      await api.users.delete(userId);
+      setDeleteConfirm(null);
+      fetchUsers();
+    } catch (e) {
+      console.error('Delete user failed', e);
     }
   };
 
@@ -119,9 +132,36 @@ export function Admin() {
                   <td className="px-4 py-3 text-slate-400 text-xs font-mono">{u.lastLogin}</td>
                   <td className="px-4 py-3 text-slate-300 font-mono">{u.portfolioCount}</td>
                   <td className="px-4 py-3">
-                    <button className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors">
-                      <MoreHorizontal className="w-4 h-4" />
-                    </button>
+                    {u.id !== authUser?.id ? (
+                      deleteConfirm === u.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleDeleteUser(u.id)}
+                            className="p-1.5 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
+                            title="Confirm delete"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm(null)}
+                            className="p-1.5 rounded-lg bg-slate-700/50 text-slate-400 hover:bg-slate-700 transition-colors"
+                            title="Cancel"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setDeleteConfirm(u.id)}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors"
+                          title="Delete user"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )
+                    ) : (
+                      <span className="text-[10px] text-slate-600">You</span>
+                    )}
                   </td>
                 </tr>
               ))}

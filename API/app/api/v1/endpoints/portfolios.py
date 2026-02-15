@@ -1,5 +1,6 @@
 from typing import List, Any
-from datetime import date
+from datetime import date, timedelta
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -7,6 +8,24 @@ from app import models, schemas
 from app.api import deps
 from app.models.portfolio import Portfolio, Position, Transaction, Collaborator
 from app.services.market_data import MarketDataService
+
+logger = logging.getLogger(__name__)
+
+
+def _last_trading_day(d: date) -> date:
+    """Return d if weekday, else roll back to Friday."""
+    wd = d.weekday()
+    if wd == 5:  # Saturday
+        return d - timedelta(days=1)
+    elif wd == 6:  # Sunday
+        return d - timedelta(days=2)
+    return d
+
+
+def _prev_trading_day(d: date) -> date:
+    """Return the trading day before d."""
+    prev = d - timedelta(days=1)
+    return _last_trading_day(prev)
 
 router = APIRouter()
 
@@ -97,13 +116,28 @@ def read_portfolio(
         })
 
     # Calculate weights, pnl, daily_change
+    # Compute daily PnL using last trading day vs previous trading day
+    today = date.today()
+    td = _last_trading_day(today)
+    prev_td = _prev_trading_day(td)
+    daily_pnl_total = 0.0
     for ep in enriched_positions:
         mkt_val = ep["quantity"] * ep["current_price"]
         ep["weight"] = round((mkt_val / total_value * 100) if total_value > 0 else 0, 2)
         ep["pnl"] = round((ep["current_price"] - ep["entry_price"]) * ep["quantity"], 2)
         cost = ep["entry_price"] * ep["quantity"]
         ep["pnl_percent"] = round(((ep["current_price"] - ep["entry_price"]) / ep["entry_price"] * 100) if ep["entry_price"] > 0 else 0, 2)
-        ep["daily_change"] = 0.0  # Will be computed by analytics if needed
+        # Get previous trading day price for daily change
+        try:
+            prev_price = md_service.get_price_at(ep["instrument_symbol"], prev_td) or ep["current_price"]
+        except Exception:
+            prev_price = ep["current_price"]
+        if prev_price and prev_price > 0:
+            daily_chg = ((ep["current_price"] - prev_price) / prev_price) * 100
+        else:
+            daily_chg = 0.0
+        ep["daily_change"] = round(daily_chg, 2)
+        daily_pnl_total += ep["quantity"] * (ep["current_price"] - (prev_price or ep["current_price"]))
 
     # Enrich collaborators with username/email
     enriched_collabs = []
@@ -122,14 +156,15 @@ def read_portfolio(
     # Build summary
     total_cost = sum(ep["entry_price"] * ep["quantity"] for ep in enriched_positions)
     total_pnl = total_value - total_cost
+    daily_pnl_pct = (daily_pnl_total / (total_value - daily_pnl_total) * 100) if (total_value - daily_pnl_total) > 0 else 0
     summary = {
         "name": portfolio.name,
         "description": portfolio.description or "",
         "currency": portfolio.currency,
         "benchmark": portfolio.benchmark_symbol or "SPY",
         "totalValue": round(total_value, 2),
-        "dailyPnl": 0,
-        "dailyPnlPercent": 0,
+        "dailyPnl": round(daily_pnl_total, 2),
+        "dailyPnlPercent": round(daily_pnl_pct, 2),
         "totalPnl": round(total_pnl, 2),
         "totalPnlPercent": round((total_pnl / total_cost * 100) if total_cost > 0 else 0, 2),
         "positionCount": len(enriched_positions),
@@ -333,13 +368,56 @@ def create_transaction(
     tx_in: schemas.portfolio.TransactionCreate,
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """Add a transaction."""
-    _get_portfolio_with_access(db, id, current_user, need_edit=True)
+    """Add a transaction. Buy/sell also update positions."""
+    portfolio = _get_portfolio_with_access(db, id, current_user, need_edit=True)
     tx = Transaction(
         portfolio_id=id,
         **tx_in.model_dump(),
     )
     db.add(tx)
+
+    # Integrate buy/sell with positions
+    if tx_in.type == 'buy' and tx_in.symbol and tx_in.symbol != '—':
+        # Check if position already exists for this symbol
+        existing_pos = db.query(Position).filter(
+            Position.portfolio_id == id,
+            Position.instrument_symbol == tx_in.symbol,
+        ).first()
+        if existing_pos:
+            # Update: average entry price and add quantity
+            old_cost = existing_pos.quantity * existing_pos.entry_price
+            new_cost = (tx_in.quantity or 0) * (tx_in.price or 0)
+            new_qty = existing_pos.quantity + (tx_in.quantity or 0)
+            if new_qty > 0:
+                existing_pos.entry_price = (old_cost + new_cost) / new_qty
+            existing_pos.quantity = new_qty
+        else:
+            # Create new position
+            md_service = MarketDataService(db)
+            try:
+                md_service.sync_instrument(tx_in.symbol)
+            except Exception:
+                pass
+            new_pos = Position(
+                portfolio_id=id,
+                instrument_symbol=tx_in.symbol,
+                quantity=tx_in.quantity or 0,
+                entry_price=tx_in.price or 0,
+                entry_date=tx_in.date or date.today(),
+                pricing_mode='market',
+            )
+            db.add(new_pos)
+    elif tx_in.type == 'sell' and tx_in.symbol and tx_in.symbol != '—':
+        # Reduce position quantity
+        existing_pos = db.query(Position).filter(
+            Position.portfolio_id == id,
+            Position.instrument_symbol == tx_in.symbol,
+        ).first()
+        if existing_pos:
+            existing_pos.quantity -= (tx_in.quantity or 0)
+            if existing_pos.quantity <= 0:
+                db.delete(existing_pos)
+
     db.commit()
     db.refresh(tx)
     return tx

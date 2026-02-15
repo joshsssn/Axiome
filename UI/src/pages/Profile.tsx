@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import {
   User, Building2, Mail, Camera, Check, Shield,
-  Key, LogOut, Download, AlertTriangle
+  Key, LogOut, Download, AlertTriangle, Upload
 } from 'lucide-react';
 
 export function Profile() {
@@ -18,12 +18,25 @@ export function Profile() {
   const [passwordNew, setPasswordNew] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [passwordSaved, setPasswordSaved] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!user) return null;
 
   const initials = displayName
     ? displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
     : user.username.slice(0, 2).toUpperCase();
+
+  const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { alert('Image must be under 2 MB'); return; }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string;
+      setAvatarUrl(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleSaveProfile = () => {
     updateProfile({
@@ -73,9 +86,11 @@ export function Profile() {
                 {initials}
               </div>
             )}
-            <div className="absolute inset-0 rounded-2xl bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity cursor-pointer">
+            <div className="absolute inset-0 rounded-2xl bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
+              onClick={() => fileInputRef.current?.click()}>
               <Camera className="w-6 h-6 text-white" />
             </div>
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
           </div>
 
           <div className="flex-1 space-y-1">
@@ -113,6 +128,13 @@ export function Profile() {
             className="w-full bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-3 py-2.5 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 placeholder:text-slate-600"
           />
           <p className="text-[10px] text-slate-600 mt-1">Paste any public image URL. Leave empty to use initials.</p>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="mt-2 flex items-center gap-2 px-3 py-2 bg-slate-700/50 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors border border-slate-600/50"
+          >
+            <Upload className="w-3.5 h-3.5" /> Upload Image
+          </button>
         </div>
       </div>
 

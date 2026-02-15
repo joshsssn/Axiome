@@ -1,6 +1,17 @@
 import pandas as pd
 import numpy as np
-from pypfopt import EfficientFrontier, risk_models, expected_returns
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    from pypfopt import EfficientFrontier, risk_models, expected_returns
+    _PYPFOPT_AVAILABLE = True
+except ImportError as e:
+    logger.error(f"PyPortfolioOpt or scikit-learn not available: {e}. "
+                 "Install with: pip install pyportfolioopt scikit-learn")
+    _PYPFOPT_AVAILABLE = False
+
 from sqlalchemy.orm import Session
 from datetime import date, timedelta
 from typing import List, Dict, Any, Optional
@@ -51,7 +62,11 @@ class OptimizationService:
         portfolio: Portfolio,
         target: str = "max_sharpe",
         constraints: Optional[Dict] = None,
+        risk_aversion: float = 1.0,
     ) -> Dict[str, Any]:
+        if not _PYPFOPT_AVAILABLE:
+            return {"error": "Optimization unavailable: scikit-learn is not installed. Run: pip install scikit-learn"}
+
         if not portfolio.positions:
             return {"error": "No positions to optimize"}
 
@@ -64,9 +79,19 @@ class OptimizationService:
         S = risk_models.CovarianceShrinkage(df).ledoit_wolf()
 
         try:
-            ef = EfficientFrontier(mu, S)
+            # Apply weight constraints if provided
+            weight_bounds = (0, 1)  # default
+            if constraints:
+                lo = constraints.get("min_weight", 0)
+                hi = constraints.get("max_weight", 1)
+                weight_bounds = (max(lo, 0), min(hi, 1))
+
+            ef = EfficientFrontier(mu, S, weight_bounds=weight_bounds)
             if target == "min_volatility":
                 ef.min_volatility()
+            elif target == "mean_variance":
+                # Quadratic utility: max  mu^T w - (risk_aversion/2) * w^T S w
+                ef.max_quadratic_utility(risk_aversion=risk_aversion)
             else:
                 ef.max_sharpe()
 
@@ -98,6 +123,8 @@ class OptimizationService:
     def get_efficient_frontier(
         self, portfolio: Portfolio, points: int = 25
     ) -> List[Dict[str, float]]:
+        if not _PYPFOPT_AVAILABLE:
+            return []
         symbols = list({p.instrument_symbol for p in portfolio.positions})
         df = self._fetch_prices(symbols)
         if df.empty or len(df.columns) < 2:
@@ -132,8 +159,11 @@ class OptimizationService:
             return []
 
     # --------------------------------- full data for the Optimization page
-    def get_full_optimization_data(self, portfolio: Portfolio) -> Dict[str, Any]:
+    def get_full_optimization_data(self, portfolio: Portfolio, constraints: Optional[Dict] = None, risk_aversion: float = 1.0) -> Dict[str, Any]:
         """Return efficient frontier, key portfolios and weight comparison."""
+        if not _PYPFOPT_AVAILABLE:
+            return {"error": "Optimization unavailable: scikit-learn is not installed. Run: pip install scikit-learn"}
+
         if not portfolio.positions:
             return {"error": "No positions to optimize"}
 
@@ -146,6 +176,13 @@ class OptimizationService:
         S = risk_models.CovarianceShrinkage(df).ledoit_wolf()
         cur_w = self._current_weights(portfolio, df)
 
+        # Weight bounds from constraints
+        weight_bounds = (0, 1)
+        if constraints:
+            lo = constraints.get("min_weight", 0)
+            hi = constraints.get("max_weight", 1)
+            weight_bounds = (max(lo, 0), min(hi, 1))
+
         # ---------- Current portfolio performance ----------
         w_arr = np.array([cur_w.get(s, 0) for s in mu.index])
         cur_ret = float(w_arr @ mu.values) * 100
@@ -154,7 +191,7 @@ class OptimizationService:
 
         # ---------- Min-Vol portfolio ----------
         try:
-            ef_mv = EfficientFrontier(mu, S)
+            ef_mv = EfficientFrontier(mu, S, weight_bounds=weight_bounds)
             ef_mv.min_volatility()
             mv_weights = ef_mv.clean_weights()
             mv_perf = ef_mv.portfolio_performance(verbose=False)
@@ -168,7 +205,7 @@ class OptimizationService:
 
         # ---------- Max-Sharpe portfolio ----------
         try:
-            ef_ms = EfficientFrontier(mu, S)
+            ef_ms = EfficientFrontier(mu, S, weight_bounds=weight_bounds)
             ef_ms.max_sharpe()
             ms_weights = ef_ms.clean_weights()
             ms_perf = ef_ms.portfolio_performance(verbose=False)
@@ -179,6 +216,20 @@ class OptimizationService:
         except Exception:
             ms_weights = {}
             max_sharpe_point = current_point
+
+        # ---------- Mean-Variance (quadratic utility) portfolio ----------
+        try:
+            ef_qu = EfficientFrontier(mu, S, weight_bounds=weight_bounds)
+            ef_qu.max_quadratic_utility(risk_aversion=risk_aversion)
+            qu_weights = ef_qu.clean_weights()
+            qu_perf = ef_qu.portfolio_performance(verbose=False)
+            mean_var_point = {
+                "risk": round(float(qu_perf[1]) * 100, 2),
+                "return": round(float(qu_perf[0]) * 100, 2),
+            }
+        except Exception:
+            qu_weights = {}
+            mean_var_point = current_point
 
         # ---------- Efficient frontier ----------
         frontier = self.get_efficient_frontier(portfolio, points=25)
@@ -192,6 +243,7 @@ class OptimizationService:
                 "current": round(cur_w.get(sym, 0) * 100, 2),
                 "minVol": round(mv_weights.get(sym, 0) * 100, 2),
                 "maxSharpe": round(ms_weights.get(sym, 0) * 100, 2),
+                "meanVar": round(qu_weights.get(sym, 0) * 100, 2),
                 "diff": round((ms_weights.get(sym, 0) - cur_w.get(sym, 0)) * 100, 2),
             })
 
@@ -200,6 +252,7 @@ class OptimizationService:
             "currentPortfolio": current_point,
             "minVolPortfolio": min_vol_point,
             "maxSharpePortfolio": max_sharpe_point,
+            "meanVarPortfolio": mean_var_point,
             "weightsTable": weights_table,
             "metrics": {
                 "current": {
@@ -216,6 +269,11 @@ class OptimizationService:
                     "return": max_sharpe_point["return"],
                     "risk": max_sharpe_point["risk"],
                     "sharpe": round(float(ms_perf[2]), 2) if ms_weights else 0,
+                },
+                "meanVar": {
+                    "return": mean_var_point["return"],
+                    "risk": mean_var_point["risk"],
+                    "sharpe": round(float(qu_perf[2]), 2) if qu_weights else 0,
                 },
             },
         }

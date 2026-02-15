@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import {
   defaultPortfolios,
+  seededRandom,
   type PortfolioData,
   type Position,
   type Transaction,
@@ -33,6 +34,7 @@ interface PortfolioContextType {
   removeStressScenario: (id: number) => void;
   currentUserId: number;
   isLoading: boolean;
+  refreshPortfolios: () => void;
 }
 
 const PortfolioContext = createContext<PortfolioContextType | null>(null);
@@ -46,6 +48,32 @@ const EMPTY_RISK: RiskMetricsData = {
   skewness: 0, kurtosis: 0, bestDay: 0, worstDay: 0,
   bestMonth: 0, worstMonth: 0, positiveMonths: 0, winRate: 0,
 };
+
+/** Generate default historical stress scenarios based on positions */
+function generateDefaultStressScenarios(positions: Position[]): StressScenario[] {
+  if (positions.length === 0) return [];
+  const topSymbols = positions.sort((a, b) => b.weight - a.weight).map(p => p.symbol);
+  const seed = positions.reduce((s, p) => s + p.id, 0);
+  const bondPos = positions.find(p => p.assetClass.toLowerCase().includes('bond'));
+  return [
+    { id: 1, name: '2008 Financial Crisis', description: 'Replay of Sep-Nov 2008 market conditions', type: 'historical', equityShock: -38.5, bondShock: -5.2, commodityShock: -25.0, portfolioImpact: parseFloat((-20 - seededRandom(seed + 400) * 15).toFixed(1)), worstPosition: topSymbols[2] || topSymbols[0] || 'N/A', worstPositionImpact: parseFloat((-40 - seededRandom(seed + 401) * 15).toFixed(1)) },
+    { id: 2, name: '2020 COVID Crash', description: 'Replay of Feb-Mar 2020 pandemic sell-off', type: 'historical', equityShock: -33.9, bondShock: 8.5, commodityShock: -12.4, portfolioImpact: parseFloat((-15 - seededRandom(seed + 410) * 12).toFixed(1)), worstPosition: topSymbols[3] || topSymbols[0] || 'N/A', worstPositionImpact: parseFloat((-35 - seededRandom(seed + 411) * 15).toFixed(1)) },
+    { id: 3, name: '2022 Rate Shock', description: 'Replay of 2022 interest rate hiking cycle', type: 'historical', equityShock: -19.4, bondShock: -17.8, commodityShock: 15.2, portfolioImpact: parseFloat((-10 - seededRandom(seed + 420) * 10).toFixed(1)), worstPosition: bondPos?.symbol || topSymbols[0] || 'N/A', worstPositionImpact: parseFloat((-25 - seededRandom(seed + 421) * 10).toFixed(1)) },
+    { id: 4, name: 'Equity Bear Market', description: '-30% equity decline scenario', type: 'parametric', equityShock: -30.0, bondShock: 5.0, commodityShock: -10.0, portfolioImpact: parseFloat((-15 - seededRandom(seed + 430) * 8).toFixed(1)), worstPosition: topSymbols[2] || topSymbols[0] || 'N/A', worstPositionImpact: parseFloat((-35 - seededRandom(seed + 431) * 10).toFixed(1)) },
+    { id: 5, name: 'Stagflation', description: 'Rates up + equity down + commodities up', type: 'parametric', equityShock: -15.0, bondShock: -12.0, commodityShock: 20.0, portfolioImpact: parseFloat((-8 - seededRandom(seed + 440) * 8).toFixed(1)), worstPosition: bondPos?.symbol || topSymbols[0] || 'N/A', worstPositionImpact: parseFloat((-20 - seededRandom(seed + 441) * 10).toFixed(1)) },
+  ];
+}
+
+/** Generate stress contribution data from positions */
+function generateStressContributions(positions: Position[]): Array<{symbol: string; crisis2008: number; covid2020: number; rateShock: number}> {
+  const seed = positions.reduce((s, p) => s + p.id, 0);
+  return positions.slice(0, Math.min(10, positions.length)).map(p => ({
+    symbol: p.symbol,
+    crisis2008: parseFloat((-15 - seededRandom(seed + p.id * 50) * 40).toFixed(1)),
+    covid2020: parseFloat((-10 - seededRandom(seed + p.id * 51) * 35).toFixed(1)),
+    rateShock: parseFloat((-5 - seededRandom(seed + p.id * 52) * 25 + (p.assetClass.toLowerCase().includes('bond') ? 10 : 0)).toFixed(1)),
+  }));
+}
 
 function emptyPortfolio(id: string, ownerId: number, name: string, description: string, currency: string, benchmark: string): PortfolioData {
   return {
@@ -121,18 +149,24 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
   const [activePortfolioId, setActivePortfolioId] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const { user: authUser } = useAuth();
   const currentUserId = authUser?.id ?? 1;
   const isBackend = useRef(false);
+  const initialLoadDone = useRef(false);
 
+  /** Full refresh (list + detail) — only for create/delete/duplicate portfolio */
   const refresh = useCallback(() => setRefreshKey(k => k + 1), []);
+  /** Detail-only refresh — for add/remove position, transaction, collaborator, etc. */
+  const refreshDetail = useCallback(() => setDetailRefreshKey(k => k + 1), []);
 
   /* ─── Fetch portfolio list ─── */
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        setIsLoading(true);
+        // Only show loading spinner on initial load, not on refresh
+        if (!initialLoadDone.current) setIsLoading(true);
         const token = localStorage.getItem('access_token');
         if (!token) {
           isBackend.current = false;
@@ -144,12 +178,22 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         const pfs: any[] = await api.portfolios.list();
         if (cancelled) return;
 
-        const mapped = pfs.map((p: any) =>
-          emptyPortfolio(String(p.id), p.owner_id, p.name, p.description ?? '', p.currency ?? 'USD', p.benchmark_symbol ?? 'SPY')
-        );
-        setPortfolios(mapped);
-        if (mapped.length > 0 && (!activePortfolioId || !mapped.find(m => m.id === activePortfolioId))) {
-          setActivePortfolioId(mapped[0].id);
+        setPortfolios(prev => {
+          const mapped = pfs.map((p: any) => {
+            // Preserve existing detail data if we already have it
+            const existing = prev.find(ep => ep.id === String(p.id));
+            if (existing) {
+              return { ...existing, summary: { ...existing.summary, name: p.name, description: p.description ?? existing.summary.description } };
+            }
+            return emptyPortfolio(String(p.id), p.owner_id, p.name, p.description ?? '', p.currency ?? 'USD', p.benchmark_symbol ?? 'SPY');
+          });
+          return mapped;
+        });
+
+        // Set active portfolio if none set
+        const pfIds = pfs.map((p: any) => String(p.id));
+        if (pfIds.length > 0 && (!activePortfolioId || !pfIds.includes(activePortfolioId))) {
+          setActivePortfolioId(pfIds[0]);
         }
       } catch (err) {
         console.error('Fetch portfolios failed', err);
@@ -157,7 +201,10 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         setPortfolios(defaultPortfolios);
         setActivePortfolioId(defaultPortfolios[0]?.id ?? '');
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+          initialLoadDone.current = true;
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -231,6 +278,20 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
             drawdownData: a.drawdownData ?? [],
             rollingVolatility: a.rollingVolatility ?? [],
             rollingCorrelation: a.rollingCorrelation ?? [],
+            // Derive recent activity from transactions (last 8)
+            recentActivity: transactions.slice(0, 8).map(t => {
+              const actionMap: Record<string, string> = { buy: 'Bought', sell: 'Sold', dividend: 'Dividend', fee: 'Fee', deposit: 'Deposit', withdrawal: 'Withdrawal' };
+              const action = actionMap[t.type] || t.type;
+              const detail = t.type === 'buy' || t.type === 'sell'
+                ? `${action} ${t.quantity} × ${t.symbol} @ $${t.price.toFixed(2)}`
+                : t.type === 'dividend'
+                  ? `${t.symbol} dividend: $${t.total.toFixed(2)}`
+                  : `${action}: $${Math.abs(t.total).toFixed(2)}${t.notes ? ' — ' + t.notes : ''}`;
+              return { date: t.date, action, detail };
+            }),
+            // Populate stress scenarios if not already set (client-side computed)
+            stressScenarios: pf.stressScenarios.length > 0 ? pf.stressScenarios : generateDefaultStressScenarios(positions),
+            stressContributions: pf.stressContributions.length > 0 ? pf.stressContributions : generateStressContributions(positions),
           };
         }));
       } catch (e) {
@@ -238,7 +299,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [activePortfolioId, refreshKey]);
+  }, [activePortfolioId, refreshKey, detailRefreshKey]);
 
   const activePortfolio = portfolios.find(p => p.id === activePortfolioId) || null;
 
@@ -292,9 +353,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         pricing_mode: pos.pricingMode,
         ...(pos.pricingMode === 'fixed' && pos.currentPrice ? { current_price: pos.currentPrice } : {}),
       });
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Add position failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const removePosition = useCallback(async (posId: number) => {
     if (!activePortfolioId) return;
@@ -304,9 +365,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     }
     try {
       await api.portfolios.deletePosition(parseInt(activePortfolioId), posId);
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Remove position failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const updatePosition = useCallback(async (posId: number, updates: Partial<Position>) => {
     if (!activePortfolioId) return;
@@ -321,9 +382,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       if (updates.currentPrice != null) payload.current_price = updates.currentPrice;
       if (updates.pricingMode != null) payload.pricing_mode = updates.pricingMode;
       await api.portfolios.updatePosition(parseInt(activePortfolioId), posId, payload);
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Update position failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const updatePortfolioMeta = useCallback(async (updates: { name?: string; description?: string; benchmark?: string }) => {
     if (!activePortfolioId) return;
@@ -337,9 +398,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       if (updates.description) payload.description = updates.description;
       if (updates.benchmark) payload.benchmark_symbol = updates.benchmark;
       await api.portfolios.update(parseInt(activePortfolioId), payload);
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Update portfolio meta failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const addTransaction = useCallback(async (tx: Omit<Transaction, 'id'>) => {
     if (!activePortfolioId) return;
@@ -349,9 +410,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     }
     try {
       await api.portfolios.addTransaction(parseInt(activePortfolioId), tx);
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Add transaction failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const removeTransaction = useCallback(async (txId: number) => {
     if (!activePortfolioId) return;
@@ -361,9 +422,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     }
     try {
       await api.portfolios.deleteTransaction(parseInt(activePortfolioId), txId);
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Remove transaction failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const addCollaborator = useCallback(async (collab: Omit<Collaborator, 'id'>) => {
     if (!activePortfolioId) return;
@@ -376,9 +437,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         user_id: collab.userId,
         permission: collab.permission,
       });
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Add collaborator failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const removeCollaborator = useCallback(async (collabId: number) => {
     if (!activePortfolioId) return;
@@ -388,9 +449,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     }
     try {
       await api.portfolios.deleteCollaborator(parseInt(activePortfolioId), collabId);
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Remove collaborator failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const updateCollaboratorPermission = useCallback(async (collabId: number, permission: 'view' | 'edit') => {
     if (!activePortfolioId) return;
@@ -400,9 +461,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     }
     try {
       await api.portfolios.updateCollaborator(parseInt(activePortfolioId), collabId, { permission });
-      refresh();
+      refreshDetail();
     } catch (e) { console.error('Update collaborator failed', e); }
-  }, [activePortfolioId, refresh]);
+  }, [activePortfolioId, refreshDetail]);
 
   const duplicatePortfolio = useCallback(async (id: string) => {
     if (!isBackend.current) {
@@ -458,6 +519,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       removeStressScenario,
       currentUserId,
       isLoading,
+      refreshPortfolios: refresh,
     }}>
       {children}
     </PortfolioContext.Provider>

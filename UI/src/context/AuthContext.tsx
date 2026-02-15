@@ -28,9 +28,9 @@ function profileFromBackend(u: any): UserProfile {
     username: u.username,
     email: u.email ?? `${u.username}@example.com`,
     role: (u.role === 'admin' || u.is_superuser) ? 'admin' : 'user',
-    displayName: u.username.charAt(0).toUpperCase() + u.username.slice(1),
-    organization: 'Portfolio Inc.',
-    avatarUrl: '',
+    displayName: u.display_name || u.username.charAt(0).toUpperCase() + u.username.slice(1),
+    organization: u.organization || '',
+    avatarUrl: u.avatar_url || '',
   };
 }
 
@@ -79,10 +79,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const updateProfile = useCallback(
     async (updates: Partial<Pick<UserProfile, 'displayName' | 'organization' | 'avatarUrl' | 'email'>>) => {
-      // Persist email/username to backend
-      if (updates.email) {
-        try { await api.users.updateMe({ email: updates.email }); } catch (e) { console.error(e); }
-      }
+      // Persist all profile fields to backend
+      try {
+        const payload: Record<string, string> = {};
+        if (updates.email) payload.email = updates.email;
+        if (updates.displayName !== undefined) payload.display_name = updates.displayName;
+        if (updates.organization !== undefined) payload.organization = updates.organization;
+        if (updates.avatarUrl !== undefined) payload.avatar_url = updates.avatarUrl;
+        if (Object.keys(payload).length > 0) {
+          await api.users.updateMe(payload);
+        }
+      } catch (e) { console.error('Profile update failed', e); }
       // Update local state
       setUser(prev => (prev ? { ...prev, ...updates } : null));
     },

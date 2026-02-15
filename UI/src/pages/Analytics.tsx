@@ -1,37 +1,152 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, AreaChart, Area, ComposedChart
 } from 'recharts';
 import { usePortfolio } from '@/context/PortfolioContext';
+import { api } from '@/services/api';
 
-type TimeRange = '6M' | '1Y' | '2Y';
+type TimeRange = 'YTD' | '6M' | '1Y' | '2Y' | 'Custom';
+
+const BENCHMARK_OPTIONS = [
+  { value: '', label: 'Portfolio Default' },
+  { value: 'SPY', label: 'S&P 500 (SPY)' },
+  { value: 'QQQ', label: 'NASDAQ 100 (QQQ)' },
+  { value: 'IWM', label: 'Russell 2000 (IWM)' },
+  { value: 'VOO', label: 'Vanguard S&P 500 (VOO)' },
+  { value: 'VTI', label: 'Total Stock Market (VTI)' },
+  { value: 'BND', label: 'Total Bond (BND)' },
+  { value: 'GLD', label: 'Gold (GLD)' },
+  { value: '^GSPC', label: 'S&P 500 Index' },
+];
 
 export function Analytics() {
-  const { activePortfolio: pf } = usePortfolio();
+  const { activePortfolio: pf, activePortfolioId } = usePortfolio();
   const [range, setRange] = useState<TimeRange>('2Y');
+  const [benchmark, setBenchmark] = useState('');
+  const [customBenchmark, setCustomBenchmark] = useState('');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [customData, setCustomData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  // The effective benchmark is the custom ticker if set, else dropdown
+  const effectiveBenchmark = customBenchmark.trim() || benchmark;
+
+  // Fetch custom analytics when benchmark or custom dates change
+  const fetchCustomAnalytics = useCallback(async () => {
+    if (!activePortfolioId) return;
+    const numId = parseInt(activePortfolioId);
+    if (isNaN(numId)) return;
+
+    const params: { benchmark?: string; start_date?: string; end_date?: string } = {};
+    if (effectiveBenchmark) params.benchmark = effectiveBenchmark;
+    if (range === 'Custom' && customStart) params.start_date = customStart;
+    if (range === 'Custom' && customEnd) params.end_date = customEnd;
+    // For non-custom ranges, we slice locally
+    if (!effectiveBenchmark && range !== 'Custom') {
+      setCustomData(null);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const data = await api.portfolios.getAnalytics(numId, params);
+      setCustomData(data);
+    } catch (e) {
+      console.error('Custom analytics failed', e);
+      setCustomData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [activePortfolioId, effectiveBenchmark, range, customStart, customEnd]);
+
+  useEffect(() => {
+    if (effectiveBenchmark || range === 'Custom') {
+      fetchCustomAnalytics();
+    } else {
+      setCustomData(null);
+    }
+  }, [effectiveBenchmark, range, fetchCustomAnalytics]);
+
   if (!pf) return <div className="text-slate-400 p-8">Select a portfolio first.</div>;
-  const rangeSlice = range === '6M' ? -126 : range === '1Y' ? -252 : undefined;
-  const chartData = (rangeSlice ? pf.performanceData.slice(rangeSlice) : pf.performanceData).filter((_: unknown, i: number) => i % 2 === 0);
-  const ddData = (rangeSlice ? pf.drawdownData.slice(rangeSlice) : pf.drawdownData).filter((_: unknown, i: number) => i % 2 === 0);
-  const rvData = rangeSlice ? pf.rollingVolatility.slice(Math.floor(rangeSlice / 5)) : pf.rollingVolatility;
+
+  // Use custom data if available, otherwise default portfolio data
+  const source = customData || pf;
+  const perfData = source.performanceData ?? pf.performanceData;
+  const ddSource = source.drawdownData ?? pf.drawdownData;
+  const rvSource = source.rollingVolatility ?? pf.rollingVolatility;
+  const monthlySource = source.monthlyReturns ?? pf.monthlyReturns;
+  const distSource = source.returnDistribution ?? pf.returnDistribution;
+  const riskSource = source.riskMetrics ?? pf.riskMetrics;
+
+  // Compute range slice (for non-custom, non-benchmark)
+  const getSlice = () => {
+    if (range === 'Custom') return undefined; // already filtered server-side
+    if (range === 'YTD') {
+      const yr = new Date().getFullYear();
+      const ytdIdx = perfData.findIndex((p: any) => p.date?.startsWith(String(yr)));
+      return ytdIdx >= 0 ? -1 * (perfData.length - ytdIdx) : undefined;
+    }
+    if (range === '6M') return -126;
+    if (range === '1Y') return -252;
+    return undefined; // 2Y = all
+  };
+  const rangeSlice = getSlice();
+  const chartData = (rangeSlice ? perfData.slice(rangeSlice) : perfData).filter((_: unknown, i: number) => i % 2 === 0);
+  const ddData = (rangeSlice ? ddSource.slice(rangeSlice) : ddSource).filter((_: unknown, i: number) => i % 2 === 0);
+  const rvData = rangeSlice ? rvSource.slice(Math.floor(rangeSlice / 5)) : rvSource;
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white">Performance Analytics</h1>
           <p className="text-slate-400 text-sm mt-1">Detailed return analysis and benchmark comparison</p>
         </div>
-        <div className="flex gap-1 bg-slate-800/50 border border-slate-700/50 rounded-lg p-0.5">
-          {(['6M', '1Y', '2Y'] as TimeRange[]).map(r => (
-            <button key={r} onClick={() => setRange(r)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${range === r ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-              {r}
-            </button>
-          ))}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Benchmark selector */}
+          <select
+            value={benchmark}
+            onChange={e => { setBenchmark(e.target.value); setCustomBenchmark(''); }}
+            className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+          >
+            {BENCHMARK_OPTIONS.map(b => (
+              <option key={b.value} value={b.value}>{b.label}</option>
+            ))}
+          </select>
+          {/* Custom ticker input */}
+          <input
+            type="text"
+            placeholder="Custom ticker..."
+            value={customBenchmark}
+            onChange={e => { setCustomBenchmark(e.target.value.toUpperCase()); if (e.target.value) setBenchmark(''); }}
+            className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 w-32 font-mono placeholder:text-slate-500"
+          />
+          {/* Time range */}
+          <div className="flex gap-1 bg-slate-800/50 border border-slate-700/50 rounded-lg p-0.5">
+            {(['YTD', '6M', '1Y', '2Y', 'Custom'] as TimeRange[]).map(r => (
+              <button key={r} onClick={() => setRange(r)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${range === r ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                {r}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+
+      {/* Custom date range inputs */}
+      {range === 'Custom' && (
+        <div className="flex items-center gap-3 bg-slate-800/30 border border-slate-700/30 rounded-lg px-4 py-3">
+          <span className="text-xs text-slate-400">From:</span>
+          <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
+            className="bg-slate-900/50 border border-slate-700 rounded-lg text-xs text-white px-2.5 py-1.5 focus:outline-none focus:border-blue-500" />
+          <span className="text-xs text-slate-400">To:</span>
+          <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)}
+            className="bg-slate-900/50 border border-slate-700 rounded-lg text-xs text-white px-2.5 py-1.5 focus:outline-none focus:border-blue-500" />
+          {loading && <span className="text-xs text-blue-400 animate-pulse ml-2">Loading...</span>}
+        </div>
+      )}
 
       {/* Cumulative Return */}
       <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-5">
@@ -60,14 +175,14 @@ export function Analytics() {
         <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-5">
           <h2 className="text-sm font-semibold text-white mb-4">Monthly Returns (%)</h2>
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={pf.monthlyReturns} barGap={2}>
+            <BarChart data={monthlySource} barGap={2}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
               <XAxis dataKey="month" stroke="#64748b" tick={{ fontSize: 10 }} />
               <YAxis stroke="#64748b" tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}%`} />
               <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
                 formatter={(v: number | undefined) => [`${(v ?? 0).toFixed(2)}%`]} />
               <Bar dataKey="portfolio" name="Portfolio" radius={[3, 3, 0, 0]}>
-                {pf.monthlyReturns.map((entry: { portfolio: number }, i: number) => (
+                {monthlySource.map((entry: { portfolio: number }, i: number) => (
                   <Cell key={i} fill={entry.portfolio >= 0 ? '#3b82f6' : '#ef4444'} />
                 ))}
               </Bar>
@@ -80,7 +195,7 @@ export function Analytics() {
         <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-5">
           <h2 className="text-sm font-semibold text-white mb-4">Return Distribution</h2>
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={pf.returnDistribution}>
+            <BarChart data={distSource}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
               <XAxis dataKey="bin" stroke="#64748b" tick={{ fontSize: 9 }} interval={4} />
               <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
@@ -89,10 +204,10 @@ export function Analytics() {
             </BarChart>
           </ResponsiveContainer>
           <div className="flex justify-center gap-6 mt-3 text-xs text-slate-400">
-            <span>Skewness: <span className="text-white font-mono">{pf.riskMetrics.skewness}</span></span>
-            <span>Kurtosis: <span className="text-white font-mono">{pf.riskMetrics.kurtosis}</span></span>
-            <span>Best Day: <span className="text-emerald-400 font-mono">+{pf.riskMetrics.bestDay}%</span></span>
-            <span>Worst Day: <span className="text-red-400 font-mono">{pf.riskMetrics.worstDay}%</span></span>
+            <span>Skewness: <span className="text-white font-mono">{riskSource.skewness}</span></span>
+            <span>Kurtosis: <span className="text-white font-mono">{riskSource.kurtosis}</span></span>
+            <span>Best Day: <span className="text-emerald-400 font-mono">+{riskSource.bestDay}%</span></span>
+            <span>Worst Day: <span className="text-red-400 font-mono">{riskSource.worstDay}%</span></span>
           </div>
         </div>
 
@@ -116,8 +231,8 @@ export function Analytics() {
             </AreaChart>
           </ResponsiveContainer>
           <div className="flex justify-center gap-6 mt-3 text-xs text-slate-400">
-            <span>Max Drawdown: <span className="text-red-400 font-mono">{pf.riskMetrics.maxDrawdown}%</span></span>
-            <span>Duration: <span className="text-white font-mono">{pf.riskMetrics.maxDrawdownDuration} days</span></span>
+            <span>Max Drawdown: <span className="text-red-400 font-mono">{riskSource.maxDrawdown}%</span></span>
+            <span>Duration: <span className="text-white font-mono">{riskSource.maxDrawdownDuration} days</span></span>
           </div>
         </div>
 

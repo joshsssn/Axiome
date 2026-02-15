@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import logging
 from sqlalchemy.orm import Session
 from datetime import date, timedelta
 from typing import List, Dict, Any, Optional
@@ -11,6 +12,21 @@ from app.schemas.analytics import (
     PerformancePoint, MonthlyReturn, DistributionBin, CorrelationMatrix
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    """Safely convert any value to float, returning default on failure."""
+    if val is None:
+        return default
+    try:
+        result = float(val)
+        if np.isnan(result) or np.isinf(result):
+            return default
+        return result
+    except (ValueError, TypeError):
+        return default
+
 # Color palettes for allocation charts
 ALLOC_COLORS = ['#3b82f6', '#10b981', '#6366f1', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#14b8a6', '#94a3b8', '#f97316']
 
@@ -19,15 +35,15 @@ class AnalyticsService:
         self.db = db
         self.md_service = MarketDataService(db)
 
-    def get_portfolio_analytics(self, portfolio: Portfolio) -> PortfolioAnalytics:
+    def get_portfolio_analytics(self, portfolio: Portfolio, benchmark_override: Optional[str] = None, start_date_override: Optional[date] = None, end_date_override: Optional[date] = None) -> PortfolioAnalytics:
         if not portfolio.positions:
             return self._get_empty_analytics()
 
-        end_date = date.today()
-        start_date = end_date - timedelta(days=365 * 2)
+        end_date = end_date_override or date.today()
+        start_date = start_date_override or (end_date - timedelta(days=365 * 2))
 
         symbols = [p.instrument_symbol for p in portfolio.positions]
-        benchmark_symbol = portfolio.benchmark_symbol or "SPY"
+        benchmark_symbol = benchmark_override or portfolio.benchmark_symbol or "SPY"
         all_symbols = list(set(symbols + [benchmark_symbol]))
 
         price_data = {}
@@ -86,12 +102,20 @@ class AnalyticsService:
         performance_data = []
         for dt in pf_cum_ret.index:
             dt_str = dt.strftime('%Y-%m-%d')
+            try:
+                pf_val = _safe_float((1 + pf_returns.loc[:dt]).prod() * 100, 100.0)
+                bench_val = _safe_float((1 + bench_returns.loc[:dt]).prod() * 100, 100.0)
+                pf_ret = _safe_float(pf_cum_ret.loc[dt])
+                bench_ret = _safe_float(bench_cum_ret.loc[dt])
+            except Exception:
+                pf_val, bench_val, pf_ret, bench_ret = 100.0, 100.0, 0.0, 0.0
+
             performance_data.append(PerformancePoint(
                 date=dt_str,
-                portfolio=round(float((1 + pf_returns.loc[:dt]).prod()) * 100, 2),
-                benchmark=round(float((1 + bench_returns.loc[:dt]).prod()) * 100, 2),
-                portfolioReturn=round(float(pf_cum_ret.loc[dt]), 2),
-                benchmarkReturn=round(float(bench_cum_ret.loc[dt]), 2),
+                portfolio=round(pf_val, 2),
+                benchmark=round(bench_val, 2),
+                portfolioReturn=round(pf_ret, 2),
+                benchmarkReturn=round(bench_ret, 2),
             ))
 
         # ======= MONTHLY RETURNS =======
@@ -137,6 +161,20 @@ class AnalyticsService:
         )
 
     def _compute_risk_metrics(self, pf_returns: pd.Series, bench_returns: pd.Series) -> RiskMetrics:
+        """Compute all risk metrics without relying on QuantStats."""
+        try:
+            return self._compute_risk_metrics_inner(pf_returns, bench_returns)
+        except Exception as e:
+            logger.error(f"Error computing risk metrics: {e}")
+            return RiskMetrics(
+                annualizedReturn=0, annualizedVolatility=0, sharpeRatio=0, sortinoRatio=0,
+                calmarRatio=0, informationRatio=0, maxDrawdown=0, maxDrawdownDuration=0,
+                beta=0, alpha=0, trackingError=0, rSquared=0, var95=0, var99=0, cvar95=0, cvar99=0,
+                downsideDeviation=0, skewness=0, kurtosis=0, bestDay=0, worstDay=0,
+                bestMonth=0, worstMonth=0, positiveMonths=0, winRate=0
+            )
+
+    def _compute_risk_metrics_inner(self, pf_returns: pd.Series, bench_returns: pd.Series) -> RiskMetrics:
         """Compute all risk metrics without relying on QuantStats."""
         n = len(pf_returns)
         ann_factor = 252
@@ -217,44 +255,48 @@ class AnalyticsService:
         win_rate = float((pf_returns > 0).sum() / max(len(pf_returns), 1)) * 100
 
         return RiskMetrics(
-            annualizedReturn=round(cagr * 100, 2),
-            annualizedVolatility=round(ann_vol * 100, 2),
-            sharpeRatio=round(sharpe, 2),
-            sortinoRatio=round(sortino, 2),
-            calmarRatio=round(calmar, 2),
-            informationRatio=round(ir, 2),
-            maxDrawdown=round(max_dd, 2),
-            maxDrawdownDuration=max_dd_duration,
-            beta=round(beta, 2),
-            alpha=round(alpha, 2),
-            trackingError=round(te * 100, 2),
-            rSquared=round(r_squared, 2),
-            var95=round(var95, 2),
-            var99=round(var99, 2),
-            cvar95=round(cvar95, 2),
-            cvar99=round(cvar99, 2),
-            downsideDeviation=round(downside_std * 100, 2),
-            skewness=round(skew, 2),
-            kurtosis=round(kurt, 2),
-            bestDay=round(best_day, 2),
-            worstDay=round(worst_day, 2),
-            bestMonth=round(best_month, 2),
-            worstMonth=round(worst_month, 2),
-            positiveMonths=positive_months,
-            winRate=round(win_rate, 1),
+            annualizedReturn=round(_safe_float(cagr * 100), 2),
+            annualizedVolatility=round(_safe_float(ann_vol * 100), 2),
+            sharpeRatio=round(_safe_float(sharpe), 2),
+            sortinoRatio=round(_safe_float(sortino), 2),
+            calmarRatio=round(_safe_float(calmar), 2),
+            informationRatio=round(_safe_float(ir), 2),
+            maxDrawdown=round(_safe_float(max_dd), 2),
+            maxDrawdownDuration=_safe_float(max_dd_duration),
+            beta=round(_safe_float(beta), 2),
+            alpha=round(_safe_float(alpha), 2),
+            trackingError=round(_safe_float(te * 100), 2),
+            rSquared=round(_safe_float(r_squared), 2),
+            var95=round(_safe_float(var95), 2),
+            var99=round(_safe_float(var99), 2),
+            cvar95=round(_safe_float(cvar95), 2),
+            cvar99=round(_safe_float(cvar99), 2),
+            downsideDeviation=round(_safe_float(downside_std * 100), 2),
+            skewness=round(_safe_float(skew), 2),
+            kurtosis=round(_safe_float(kurt), 2),
+            bestDay=round(_safe_float(best_day), 2),
+            worstDay=round(_safe_float(worst_day), 2),
+            bestMonth=round(_safe_float(best_month), 2),
+            worstMonth=round(_safe_float(worst_month), 2),
+            positiveMonths=int(_safe_float(positive_months)),
+            winRate=round(_safe_float(win_rate), 1),
         )
 
     def _compute_monthly_returns(self, pf_returns: pd.Series, bench_returns: pd.Series) -> List[MonthlyReturn]:
-        pf_monthly = pf_returns.resample('ME').apply(lambda x: (1 + x).prod() - 1).fillna(0)
-        bench_monthly = bench_returns.resample('ME').apply(lambda x: (1 + x).prod() - 1).fillna(0)
-        data = []
-        for dt in pf_monthly.index:
-            data.append(MonthlyReturn(
-                month=dt.strftime('%b %y'),
-                portfolio=round(float(pf_monthly.loc[dt]) * 100, 2),
-                benchmark=round(float(bench_monthly.get(dt, 0)) * 100, 2),
-            ))
-        return data
+        try:
+            pf_monthly = pf_returns.resample('ME').apply(lambda x: (1 + x).prod() - 1).fillna(0)
+            bench_monthly = bench_returns.resample('ME').apply(lambda x: (1 + x).prod() - 1).fillna(0)
+            data = []
+            for dt in pf_monthly.index:
+                data.append(MonthlyReturn(
+                    month=dt.strftime('%b %y'),
+                    portfolio=round(_safe_float(pf_monthly.loc[dt]) * 100, 2),
+                    benchmark=round(_safe_float(bench_monthly.get(dt, 0)) * 100, 2),
+                ))
+            return data
+        except Exception as e:
+            logger.error(f"Error computing monthly returns: {e}")
+            return []
 
     def _compute_return_distribution(self, pf_returns: pd.Series) -> List[DistributionBin]:
         daily_pct = pf_returns * 100
@@ -267,52 +309,69 @@ class AnalyticsService:
         return result
 
     def _compute_drawdown_data(self, pf_returns: pd.Series) -> List[Dict[str, float]]:
-        cum = (1 + pf_returns).cumprod()
-        rolling_max = cum.cummax()
-        drawdown = ((cum - rolling_max) / rolling_max) * 100
-        cum_ret = (cum / cum.iloc[0] - 1) * 100
-        data = []
-        for dt in pf_returns.index:
-            data.append({
-                "date": dt.strftime('%Y-%m-%d'),
-                "drawdown": round(float(drawdown.loc[dt]), 2),
-                "cumReturn": round(float(cum_ret.loc[dt]), 2),
-            })
-        return data
+        try:
+            cum = (1 + pf_returns).cumprod()
+            rolling_max = cum.cummax()
+            drawdown = ((cum - rolling_max) / rolling_max) * 100
+            cum_ret = (cum / cum.iloc[0] - 1) * 100
+            data = []
+            for dt in pf_returns.index:
+                data.append({
+                    "date": dt.strftime('%Y-%m-%d'),
+                    "drawdown": round(_safe_float(drawdown.loc[dt]), 2),
+                    "cumReturn": round(_safe_float(cum_ret.loc[dt]), 2),
+                })
+            return data
+        except Exception as e:
+            logger.error(f"Error computing drawdown: {e}")
+            return []
 
     def _compute_rolling_volatility(self, pf_returns: pd.Series, bench_returns: pd.Series, window: int = 60) -> List[Dict[str, float]]:
-        pf_vol = pf_returns.rolling(window).std() * np.sqrt(252) * 100
-        bench_vol = bench_returns.rolling(window).std() * np.sqrt(252) * 100
-        data = []
-        # Sample every 5 days
-        sampled = pf_vol.dropna().iloc[::5]
-        for dt in sampled.index:
-            data.append({
-                "date": dt.strftime('%Y-%m-%d'),
-                "portfolio": round(float(pf_vol.loc[dt]), 2),
-                "benchmark": round(float(bench_vol.get(dt, 0)), 2),
-            })
-        return data
+        try:
+            pf_vol = pf_returns.rolling(window).std() * np.sqrt(252) * 100
+            bench_vol = bench_returns.rolling(window).std() * np.sqrt(252) * 100
+            data = []
+            # Sample every 5 days
+            sampled = pf_vol.dropna().iloc[::5]
+            for dt in sampled.index:
+                data.append({
+                    "date": dt.strftime('%Y-%m-%d'),
+                    "portfolio": round(_safe_float(pf_vol.loc[dt]), 2),
+                    "benchmark": round(_safe_float(bench_vol.get(dt, 0)), 2),
+                })
+            return data
+        except Exception as e:
+            logger.error(f"Error computing rolling volatility: {e}")
+            return []
 
     def _compute_rolling_correlation(self, pf_returns: pd.Series, bench_returns: pd.Series, window: int = 60) -> List[Dict[str, float]]:
-        rolling_corr = pf_returns.rolling(window).corr(bench_returns)
-        data = []
-        sampled = rolling_corr.dropna().iloc[::5]
-        for dt in sampled.index:
-            data.append({
-                "date": dt.strftime('%Y-%m-%d'),
-                "correlation": round(float(rolling_corr.loc[dt]), 3),
-            })
-        return data
+        try:
+            rolling_corr = pf_returns.rolling(window).corr(bench_returns)
+            data = []
+            sampled = rolling_corr.dropna().iloc[::5]
+            for dt in sampled.index:
+                data.append({
+                    "date": dt.strftime('%Y-%m-%d'),
+                    "correlation": round(_safe_float(rolling_corr.loc[dt]), 3),
+                })
+            return data
+        except Exception as e:
+            logger.error(f"Error computing rolling correlation: {e}")
+            return []
 
     def _calculate_allocation(self, positions: List[Position], weights: Dict[str, float], attr: str) -> List[AllocationItem]:
         allocs: Dict[str, float] = {}
+        seen_symbols: set = set()
         for p in positions:
-            if p.instrument and p.instrument_symbol in weights:
+            sym = p.instrument_symbol
+            if sym in seen_symbols:
+                continue  # Only count each symbol once (weights are already aggregated)
+            seen_symbols.add(sym)
+            if p.instrument and sym in weights:
                 key = getattr(p.instrument, attr, None) or 'Unknown'
-                allocs[key] = allocs.get(key, 0) + weights[p.instrument_symbol]
-            elif p.instrument_symbol in weights:
-                allocs['Unknown'] = allocs.get('Unknown', 0) + weights[p.instrument_symbol]
+                allocs[key] = allocs.get(key, 0) + weights[sym]
+            elif sym in weights:
+                allocs['Unknown'] = allocs.get('Unknown', 0) + weights[sym]
 
         items = sorted(allocs.items(), key=lambda x: -x[1])
         return [AllocationItem(name=k, value=round(v * 100, 1), color=ALLOC_COLORS[i % len(ALLOC_COLORS)]) for i, (k, v) in enumerate(items)]

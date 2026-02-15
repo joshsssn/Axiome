@@ -37,7 +37,7 @@ export const api = {
     // ─── Users ──────────────────────────────────────────
     users: {
         me: () => request('/users/me'),
-        updateMe: (data: { email?: string; username?: string }) =>
+        updateMe: (data: { email?: string; username?: string; display_name?: string; organization?: string; avatar_url?: string }) =>
             request('/users/me', { method: 'PUT', body: JSON.stringify(data) }),
         changePassword: (currentPassword: string, newPassword: string) =>
             request('/users/me/password', {
@@ -47,6 +47,7 @@ export const api = {
         list: () => request('/users/'),
         create: (data: { username: string; email: string; password: string; role?: string }) =>
             request('/users/', { method: 'POST', body: JSON.stringify(data) }),
+        delete: (id: number) => request(`/users/${id}`, { method: 'DELETE' }),
     },
 
     // ─── Portfolios ─────────────────────────────────────
@@ -83,14 +84,31 @@ export const api = {
             request(`/portfolios/${id}/collaborators/${collabId}`, { method: 'DELETE' }),
 
         // Analytics & Optimization
-        getAnalytics: (id: number) => request(`/portfolios/${id}/analytics`),
-        optimize: (id: number, target: string) =>
-            request(`/portfolios/${id}/optimize`, { method: 'POST', body: JSON.stringify({ target }) }),
-        getOptimizationData: (id: number) => request(`/portfolios/${id}/optimize/frontier`),
+        getAnalytics: (id: number, params?: { benchmark?: string; start_date?: string; end_date?: string }) => {
+            const qs = new URLSearchParams();
+            if (params?.benchmark) qs.set('benchmark', params.benchmark);
+            if (params?.start_date) qs.set('start_date', params.start_date);
+            if (params?.end_date) qs.set('end_date', params.end_date);
+            const suffix = qs.toString() ? `?${qs.toString()}` : '';
+            return request(`/portfolios/${id}/analytics${suffix}`);
+        },
+        optimize: (id: number, target: string, constraints?: { min_weight?: number; max_weight?: number; risk_aversion?: number }) =>
+            request(`/portfolios/${id}/optimize`, { method: 'POST', body: JSON.stringify({ target, ...constraints }) }),
+        getOptimizationData: (id: number, constraints?: { min_weight?: number; max_weight?: number; risk_aversion?: number }) => {
+            const qs = new URLSearchParams();
+            if (constraints?.min_weight != null) qs.set('min_weight', String(constraints.min_weight));
+            if (constraints?.max_weight != null) qs.set('max_weight', String(constraints.max_weight));
+            if (constraints?.risk_aversion != null) qs.set('risk_aversion', String(constraints.risk_aversion));
+            const suffix = qs.toString() ? `?${qs.toString()}` : '';
+            return request(`/portfolios/${id}/optimize/frontier${suffix}`);
+        },
+        saveOptimized: (id: number, name: string, weights: Record<string, number>) =>
+            request(`/portfolios/${id}/optimize/save`, { method: 'POST', body: JSON.stringify({ name, weights }) }),
     },
 
     // ─── Market Data ────────────────────────────────────
     marketData: {
         getPrice: (symbol: string, date: string) => request(`/market-data/price/${symbol}?date=${date}`),
+        searchTicker: (query: string) => request(`/market-data/search/${encodeURIComponent(query)}`),
     },
 };

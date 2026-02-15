@@ -23,6 +23,9 @@ def update_user_me(
     db: Session = Depends(deps.get_db),
     email: str = Body(None),
     username: str = Body(None),
+    display_name: str = Body(None),
+    organization: str = Body(None),
+    avatar_url: str = Body(None),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Update current user profile."""
@@ -30,6 +33,12 @@ def update_user_me(
         current_user.email = email
     if username is not None:
         current_user.username = username
+    if display_name is not None:
+        current_user.display_name = display_name
+    if organization is not None:
+        current_user.organization = organization
+    if avatar_url is not None:
+        current_user.avatar_url = avatar_url
     db.commit()
     db.refresh(current_user)
     return current_user
@@ -90,3 +99,23 @@ def create_user(
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.delete("/{user_id}")
+def delete_user(
+    *,
+    db: Session = Depends(deps.get_db),
+    user_id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Delete a user (admin only). Cannot delete yourself."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can delete users")
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(user)
+    db.commit()
+    return {"ok": True}

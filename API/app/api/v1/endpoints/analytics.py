@@ -1,5 +1,6 @@
-from typing import Any
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any, Optional
+from datetime import date
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -14,10 +15,14 @@ def get_portfolio_analytics(
     *,
     db: Session = Depends(deps.get_db),
     id: int,
+    benchmark: Optional[str] = Query(None, description="Override benchmark symbol"),
+    start_date: Optional[date] = Query(None, description="Custom start date"),
+    end_date: Optional[date] = Query(None, description="Custom end date"),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get portfolio analytics (performance, risk metrics, allocation).
+    Accepts optional benchmark, start_date, end_date overrides.
     """
     portfolio = db.query(Portfolio).filter(Portfolio.id == id).first()
     if not portfolio:
@@ -33,7 +38,12 @@ def get_portfolio_analytics(
 
     analytics_service = AnalyticsService(db)
     try:
-        data = analytics_service.get_portfolio_analytics(portfolio)
+        data = analytics_service.get_portfolio_analytics(
+            portfolio,
+            benchmark_override=benchmark,
+            start_date_override=start_date,
+            end_date_override=end_date,
+        )
         return data
     except Exception as e:
         print(f"Analytics Error: {e}")
