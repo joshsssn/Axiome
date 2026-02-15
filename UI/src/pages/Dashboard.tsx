@@ -7,7 +7,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { usePortfolio } from '@/context/PortfolioContext';
 import { api } from '@/services/api';
 
-type TimeRange = 'YTD' | '6M' | '1Y' | '2Y';
+type TimeRange = 'YTD' | '6M' | '1Y' | '2Y' | 'Max';
 
 const BENCH_OPTIONS = [
   { value: '', label: 'Default' },
@@ -23,7 +23,7 @@ const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
 
 export function Dashboard() {
   const { activePortfolio: pf, activePortfolioId, isLoading } = usePortfolio();
-  const [dashRange, setDashRange] = useState<TimeRange>('2Y');
+  const [dashRange, setDashRange] = useState<TimeRange>('Max');
   const [dashBenchmark, setDashBenchmark] = useState('');
   const [customTicker, setCustomTicker] = useState('');
   const [dashPerfData, setDashPerfData] = useState<any[] | null>(null);
@@ -75,7 +75,8 @@ export function Dashboard() {
     }
     if (dashRange === '6M') return -126;
     if (dashRange === '1Y') return -252;
-    return undefined;
+    if (dashRange === '2Y') return -504;
+    return undefined; // Max = all data (since inception)
   };
   const rangeSlice = getSlice();
   const chartData = (rangeSlice ? rawPerf.slice(rangeSlice) : rawPerf).filter((_: unknown, i: number) => i % 3 === 0);
@@ -145,7 +146,7 @@ export function Dashboard() {
                 onChange={e => { setCustomTicker(e.target.value.toUpperCase()); if (e.target.value) setDashBenchmark(''); }}
                 className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-2 py-1 text-[11px] text-white w-20 font-mono placeholder:text-slate-500 focus:outline-none focus:border-blue-500" />
               <div className="flex gap-0.5 bg-slate-900/50 border border-slate-700/50 rounded-lg p-0.5">
-                {(['YTD', '6M', '1Y', '2Y'] as TimeRange[]).map(r => (
+                {(['YTD', '6M', '1Y', '2Y', 'Max'] as TimeRange[]).map(r => (
                   <button key={r} onClick={() => setDashRange(r)}
                     className={`px-2 py-1 text-[11px] font-medium rounded-md transition-all ${dashRange === r ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>{r}</button>
                 ))}

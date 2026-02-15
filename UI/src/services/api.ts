@@ -104,6 +104,13 @@ export const api = {
         },
         saveOptimized: (id: number, name: string, weights: Record<string, number>) =>
             request(`/portfolios/${id}/optimize/save`, { method: 'POST', body: JSON.stringify({ name, weights }) }),
+
+        // Backtesting
+        runBacktest: (id: number, params: {
+            start_date: string; end_date: string;
+            initial_capital?: number; benchmark?: string;
+            rebalance_freq?: string; custom_weights?: Record<string, number>;
+        }) => request(`/portfolios/${id}/backtest`, { method: 'POST', body: JSON.stringify(params) }),
     },
 
     // ─── Market Data ────────────────────────────────────

@@ -40,48 +40,93 @@ class AnalyticsService:
             return self._get_empty_analytics()
 
         end_date = end_date_override or date.today()
-        start_date = start_date_override or (end_date - timedelta(days=365 * 2))
+
+        # Default start = earliest position entry date (not 2 years ago)
+        if start_date_override:
+            start_date = start_date_override
+        else:
+            entry_dates = [p.entry_date for p in portfolio.positions if p.entry_date]
+            start_date = min(entry_dates) if entry_dates else (end_date - timedelta(days=365 * 2))
+            # Pad a few days before earliest entry so first-day return is computable
+            start_date = start_date - timedelta(days=5)
 
         symbols = [p.instrument_symbol for p in portfolio.positions]
         benchmark_symbol = benchmark_override or portfolio.benchmark_symbol or "SPY"
         all_symbols = list(set(symbols + [benchmark_symbol]))
 
+        # Batch: ensure all instruments exist (DB only) then download missing history
+        self.md_service.ensure_instruments_exist(all_symbols)
+        self.md_service.batch_download_history(all_symbols, start_date, end_date)
+
         price_data = {}
         for sym in all_symbols:
             try:
-                self.md_service.sync_instrument(sym)
                 history = self.md_service.get_price_history(sym, start_date, end_date)
                 if history:
                     dates = [h.date for h in history]
                     prices = [h.adjusted_close or h.close for h in history]
-                    price_data[sym] = pd.Series(data=prices, index=pd.to_datetime(dates))
+                    s = pd.Series(data=prices, index=pd.to_datetime(dates))
+                    s = s[~s.index.duplicated(keep='first')]
+                    price_data[sym] = s
             except Exception as e:
-                print(f"Error fetching {sym}: {e}")
+                logger.warning(f"Error fetching {sym}: {e}")
 
         df_prices = pd.DataFrame(price_data)
         df_prices = df_prices.ffill().dropna()
 
-        if df_prices.empty or len(df_prices) < 10:
+        if df_prices.empty or len(df_prices) < 5:
             return self._get_empty_analytics()
 
-        # Calculate weights
-        current_values = {}
-        total_value = 0.0
+        # ── Aggregate position quantities & entry dates ──
+        position_qty: Dict[str, float] = {}
+        position_entry: Dict[str, date] = {}
         for p in portfolio.positions:
-            if p.instrument_symbol in df_prices.columns:
-                last_price = df_prices[p.instrument_symbol].iloc[-1]
-                val = p.quantity * last_price
-                current_values[p.instrument_symbol] = current_values.get(p.instrument_symbol, 0) + val
-                total_value += val
+            sym = p.instrument_symbol
+            if sym in df_prices.columns:
+                position_qty[sym] = position_qty.get(sym, 0) + p.quantity
+                ed = p.entry_date or start_date
+                if sym not in position_entry or ed < position_entry[sym]:
+                    position_entry[sym] = ed
 
-        weights = {sym: val / total_value for sym, val in current_values.items() if total_value > 0}
+        # Current weights (used for allocation charts)
+        current_values: Dict[str, float] = {}
+        total_value = 0.0
+        for sym, qty in position_qty.items():
+            last_price = float(df_prices[sym].iloc[-1])
+            val = qty * last_price
+            current_values[sym] = val
+            total_value += val
+        weights = {sym: val / total_value for sym, val in current_values.items()} if total_value > 0 else {}
         valid_symbols = [s for s in weights.keys() if s in df_prices.columns]
 
         if not valid_symbols:
             return self._get_empty_analytics()
 
         returns = df_prices.pct_change().dropna()
-        pf_returns = returns[valid_symbols].dot(pd.Series({s: weights[s] for s in valid_symbols}))
+
+        # ── Dynamic weights: position-aware (weight=0 before entry_date) ──
+        qty_series = pd.Series({sym: position_qty[sym] for sym in valid_symbols})
+        mask = pd.DataFrame(0.0, index=df_prices.index, columns=valid_symbols)
+        for sym in valid_symbols:
+            entry_ts = pd.Timestamp(position_entry.get(sym, start_date))
+            mask.loc[mask.index >= entry_ts, sym] = 1.0
+
+        mkt_vals = df_prices[valid_symbols].multiply(qty_series) * mask
+        daily_total = mkt_vals.sum(axis=1).replace(0, np.nan)
+        weights_df = mkt_vals.div(daily_total, axis=0).fillna(0)
+
+        # Use previous day's weights for today's return (standard methodology)
+        shifted_w = weights_df.shift(1)
+        shifted_w.iloc[0] = weights_df.iloc[0]
+
+        # Align mask to returns index
+        ret_mask = mask.reindex(returns.index).fillna(0)
+        pf_returns = (returns[valid_symbols] * shifted_w.reindex(returns.index).fillna(0) * ret_mask).sum(axis=1)
+
+        # Keep only days with at least one active position
+        active_days = ret_mask.sum(axis=1) > 0
+        pf_returns = pf_returns[active_days]
+
         bench_returns = returns[benchmark_symbol] if benchmark_symbol in returns.columns else pd.Series(0, index=returns.index)
 
         # Align indices

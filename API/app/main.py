@@ -1,5 +1,9 @@
+import threading
+import logging
 from fastapi import FastAPI
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -10,11 +14,34 @@ app = FastAPI(
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
 
+
+def _background_price_refresh():
+    """Refresh all instrument prices in a background thread so startup is instant."""
+    try:
+        from app.services.market_data import MarketDataService
+        db = SessionLocal()
+        try:
+            svc = MarketDataService(db)
+            count = svc.refresh_all_prices()
+            logger.info(f"Background price refresh complete: {count} instruments updated")
+        except Exception as e:
+            logger.warning(f"Background price refresh failed: {e}")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Background price refresh thread error: {e}")
+
+
 @app.on_event("startup")
 def startup_event():
     db = SessionLocal()
     init_db(db)
     db.close()
+
+    # Refresh prices in background — does NOT block the server from accepting requests
+    t = threading.Thread(target=_background_price_refresh, daemon=True)
+    t.start()
+    logger.info("Background price refresh thread started")
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -32,7 +59,7 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to Portfolio Tracking Platform API"}
+    return {"message": "Welcome to Axiome API"}
 
 @app.get("/health")
 def health_check():

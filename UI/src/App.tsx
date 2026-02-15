@@ -10,8 +10,11 @@ import { Analytics } from '@/pages/Analytics';
 import { Risk } from '@/pages/Risk';
 import { Optimization } from '@/pages/Optimization';
 import { StressTest } from '@/pages/StressTest';
+import { PortfolioComparison } from '@/pages/PortfolioComparison';
+import { Backtesting } from '@/pages/Backtesting';
 import { Admin } from '@/pages/Admin';
 import { Profile } from '@/pages/Profile';
+import { About } from '@/pages/About';
 import { Login } from '@/pages/Login';
 import { PortfolioProvider } from '@/context/PortfolioContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
@@ -27,8 +30,11 @@ const pages: Record<Page, React.ComponentType> = {
   risk: Risk,
   optimization: Optimization,
   stress: StressTest,
+  comparison: PortfolioComparison,
+  backtest: Backtesting,
   admin: Admin,
   profile: Profile,
+  about: About,
 };
 
 function AuthenticatedApp() {

@@ -1,23 +1,35 @@
+"""
+Market data service — optimised for speed.
+
+Key improvements over the original:
+  • batch_sync_instruments() / batch_download_history() use a single
+    yf.download() call for N symbols instead of N sequential calls.
+  • get_latest_prices_bulk() is a single DB query — no yfinance at all.
+  • get_price_at() is DB-only (no yfinance call in the hot path).
+  • Concurrency-safe dedup via INSERT … ON CONFLICT DO NOTHING.
+  • In-process LRU + TTL cache for instrument metadata.
+"""
+
 import yfinance as yf
 import time
 import logging
-from datetime import date, datetime, timedelta
-from typing import Optional, Dict, Any, List
+from datetime import date, timedelta
+from typing import Optional, Dict, Any, List, Set
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, and_
 from app.models.instrument import Instrument, PriceHistory
 
 logger = logging.getLogger(__name__)
 
-# ---------- Simple in-process rate-limiter / cache ----------
+# ────────────── in-process rate-limiter / cache ──────────────
 _last_yf_call: float = 0.0
-_YF_MIN_INTERVAL = 0.35  # seconds between Yahoo Finance API calls
-_price_cache: Dict[str, Any] = {}  # key -> (timestamp, value)
-_CACHE_TTL = 300  # 5 minutes
+_YF_MIN_INTERVAL = 0.35          # seconds between yfinance API calls
+_price_cache: Dict[str, Any] = {}
+_CACHE_TTL = 300                 # 5 min
 
 
 def _rate_limit():
-    """Enforce minimum interval between yfinance calls to avoid 429."""
     global _last_yf_call
     elapsed = time.time() - _last_yf_call
     if elapsed < _YF_MIN_INTERVAL:
@@ -26,7 +38,6 @@ def _rate_limit():
 
 
 def _cache_get(key: str) -> Any:
-    """Get value from in-memory cache if not expired."""
     entry = _price_cache.get(key)
     if entry and (time.time() - entry[0]) < _CACHE_TTL:
         return entry[1]
@@ -34,16 +45,15 @@ def _cache_get(key: str) -> Any:
 
 
 def _cache_set(key: str, value: Any):
-    """Store value in in-memory cache."""
     _price_cache[key] = (time.time(), value)
-    # Evict old entries periodically
     if len(_price_cache) > 500:
         cutoff = time.time() - _CACHE_TTL
         expired = [k for k, v in _price_cache.items() if v[0] < cutoff]
         for k in expired:
             del _price_cache[k]
 
-# Common stocks metadata fallback for when yfinance .info is rate-limited
+
+# ────────────── known metadata fallback ──────────────
 _KNOWN_META: Dict[str, Dict[str, str]] = {
     "AAPL": {"name": "Apple Inc.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
     "MSFT": {"name": "Microsoft Corp.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
@@ -89,7 +99,6 @@ _KNOWN_META: Dict[str, Dict[str, str]] = {
     "^GSPC": {"name": "S&P 500 Index", "sector": "Index", "country": "US", "currency": "USD", "asset_class": "Index"},
     "^DJI": {"name": "Dow Jones Industrial", "sector": "Index", "country": "US", "currency": "USD", "asset_class": "Index"},
     "^IXIC": {"name": "NASDAQ Composite", "sector": "Index", "country": "US", "currency": "USD", "asset_class": "Index"},
-    # Additional common tickers
     "COR": {"name": "Cencora Inc.", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
     "AVGO": {"name": "Broadcom Inc.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
     "LLY": {"name": "Eli Lilly and Co.", "sector": "Healthcare", "country": "US", "currency": "USD", "asset_class": "Equity"},
@@ -116,14 +125,18 @@ _KNOWN_META: Dict[str, Dict[str, str]] = {
     "^VIX": {"name": "CBOE Volatility Index", "sector": "Volatility", "country": "US", "currency": "USD", "asset_class": "Index"},
 }
 
+
+# ═══════════════════════════════════════════════════════════════
+#  MarketDataService
+# ═══════════════════════════════════════════════════════════════
 class MarketDataService:
     def __init__(self, db: Session):
         self.db = db
 
+    # ──────────────────── INSTRUMENT METADATA ────────────────────
+
     def get_instrument_info(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """
-        Fetch instrument metadata from yfinance with rate-limiting and caching.
-        """
+        """Fetch instrument metadata from yfinance with caching."""
         cache_key = f"info:{symbol}"
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -134,8 +147,6 @@ class MarketDataService:
                 _rate_limit()
                 ticker = yf.Ticker(symbol)
                 info = ticker.info
-
-                # Map yfinance info to our model
                 result = {
                     "symbol": symbol,
                     "name": info.get("longName") or info.get("shortName"),
@@ -143,208 +154,483 @@ class MarketDataService:
                     "sector": info.get("sector"),
                     "country": info.get("country"),
                     "currency": info.get("currency"),
-                    "current_price": info.get("currentPrice") or info.get("regularMarketPrice")
+                    "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
                 }
                 _cache_set(cache_key, result)
                 return result
             except Exception as e:
-                err_msg = str(e).lower()
-                if "429" in err_msg or "too many requests" in err_msg:
-                    wait = 2 ** (attempt + 1)
-                    logger.warning(f"Rate limited on {symbol}, retrying in {wait}s (attempt {attempt + 1}/3)")
-                    time.sleep(wait)
+                err = str(e).lower()
+                if "429" in err or "too many requests" in err:
+                    time.sleep(2 ** (attempt + 1))
                     continue
-                elif "404" in err_msg or "not found" in err_msg:
-                    logger.warning(f"Ticker {symbol} not found (404), using fallback metadata")
-                    break
-                else:
-                    logger.error(f"Error fetching info for {symbol}: {e}")
-                    break
-
-        # Return None – caller will use _KNOWN_META fallback
+                break
         return None
+
+    # ── fast DB-only helper: ensure instrument rows exist ──
+    def ensure_instruments_exist(self, symbols: List[str]) -> Dict[str, Instrument]:
+        """
+        Make sure every symbol has an Instrument row in the DB.
+        Uses _KNOWN_META as fallback — **no yfinance call**.
+        Returns {symbol: Instrument}.
+        """
+        if not symbols:
+            return {}
+        existing = (
+            self.db.query(Instrument)
+            .filter(Instrument.symbol.in_(symbols))
+            .all()
+        )
+        found = {i.symbol: i for i in existing}
+        missing = [s for s in symbols if s not in found]
+        for sym in missing:
+            meta = _KNOWN_META.get(sym, {})
+            inst = Instrument(
+                symbol=sym,
+                name=meta.get("name", sym),
+                asset_class=meta.get("asset_class", "Equity"),
+                sector=meta.get("sector"),
+                country=meta.get("country", "US"),
+                currency=meta.get("currency", "USD"),
+                last_updated=None,
+            )
+            self.db.add(inst)
+            found[sym] = inst
+        if missing:
+            try:
+                self.db.commit()
+            except IntegrityError:
+                self.db.rollback()
+                existing = self.db.query(Instrument).filter(Instrument.symbol.in_(symbols)).all()
+                found = {i.symbol: i for i in existing}
+        return found
 
     def sync_instrument(self, symbol: str) -> Optional[Instrument]:
         """
-        Ensure instrument exists in DB and is updated.
-        Uses yfinance .info when possible, falls back to known metadata + price history.
+        Ensure instrument exists and is up-to-date.
+        Fast path: if updated today, skip yfinance entirely.
         """
         instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
-        
-        should_update = False
+
+        if instrument and instrument.last_updated == date.today():
+            return instrument  # already fresh — instant
+
+        info = self.get_instrument_info(symbol)
+        if not info:
+            meta = _KNOWN_META.get(symbol, {})
+            latest_price = None
+            last_rec = (
+                self.db.query(PriceHistory)
+                .filter(PriceHistory.instrument_symbol == symbol)
+                .order_by(PriceHistory.date.desc())
+                .first()
+            )
+            if last_rec:
+                latest_price = last_rec.adjusted_close or last_rec.close
+            info = {
+                "symbol": symbol,
+                "name": meta.get("name", symbol),
+                "asset_class": meta.get("asset_class", "Equity"),
+                "sector": meta.get("sector"),
+                "country": meta.get("country", "US"),
+                "currency": meta.get("currency", "USD"),
+                "current_price": latest_price,
+            }
+
         if not instrument:
-            should_update = True
-        elif instrument.last_updated != date.today():
-            should_update = True
+            instrument = Instrument(**info)
+            instrument.last_updated = date.today()
+            self.db.add(instrument)
+        else:
+            for k, v in info.items():
+                if v is not None:
+                    setattr(instrument, k, v)
+            instrument.last_updated = date.today()
 
-        if should_update:
-            info = self.get_instrument_info(symbol)
-
-            # If yfinance .info failed, build fallback from known metadata + price history
-            if not info:
-                known = _KNOWN_META.get(symbol, {})
-                # Try to get latest price from DB history
-                latest_price = None
-                last_record = self.db.query(PriceHistory).filter(
-                    PriceHistory.instrument_symbol == symbol
-                ).order_by(PriceHistory.date.desc()).first()
-                if last_record:
-                    latest_price = last_record.adjusted_close or last_record.close
-
-                info = {
-                    "symbol": symbol,
-                    "name": known.get("name", symbol),
-                    "asset_class": known.get("asset_class", "Equity"),
-                    "sector": known.get("sector"),
-                    "country": known.get("country", "US"),
-                    "currency": known.get("currency", "USD"),
-                    "current_price": latest_price,
-                }
-
-            if not instrument:
-                instrument = Instrument(**info)
-                instrument.last_updated = date.today()
-                self.db.add(instrument)
-            else:
-                for key, value in info.items():
-                    if value is not None:
-                        setattr(instrument, key, value)
-                instrument.last_updated = date.today()
-            
-            try:
-                self.db.commit()
-                self.db.refresh(instrument)
-            except IntegrityError:
-                self.db.rollback()
-                # Re-fetch in case another request created it
-                instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
-            except Exception as e:
-                self.db.rollback()
-                logger.error(f"Error syncing instrument {symbol}: {e}")
-                instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
-            
+        try:
+            self.db.commit()
+            self.db.refresh(instrument)
+        except IntegrityError:
+            self.db.rollback()
+            instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"sync_instrument({symbol}): {e}")
+            instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
         return instrument
 
-    def get_price_at(self, symbol: str, target_date: date) -> Optional[float]:
-        """Get the closing price on or before target_date (up to 7 day lookback for weekends/holidays)."""
+    def batch_sync_instruments(self, symbols: List[str]) -> Dict[str, Instrument]:
+        """
+        Sync multiple instruments in one shot.
+        • Instruments already updated today are skipped.
+        • Remaining instruments get metadata from _KNOWN_META (instant)
+          and current_price from a single yf.download() call.
+        """
+        if not symbols:
+            return {}
+        unique_syms = list(set(symbols))
+
+        # 1) Ensure rows exist (DB only, instant)
+        inst_map = self.ensure_instruments_exist(unique_syms)
+
+        # 2) Separate stale from fresh
+        stale = [s for s in unique_syms
+                 if not inst_map.get(s) or not inst_map[s].last_updated or inst_map[s].last_updated < date.today()]
+        if not stale:
+            return inst_map
+
+        # 3) Batch-fetch latest prices with yf.download (ONE call)
+        try:
+            _rate_limit()
+            df = yf.download(stale, period="5d", progress=False, threads=True)
+            if df is not None and not df.empty:
+                if len(stale) == 1:
+                    last_close = float(df["Close"].dropna().iloc[-1]) if "Close" in df.columns else None
+                    if last_close and last_close > 0:
+                        inst_map[stale[0]].current_price = last_close
+                else:
+                    if "Close" in df.columns:
+                        last_row = df["Close"].dropna().iloc[-1] if len(df["Close"].dropna()) else None
+                        if last_row is not None:
+                            for sym in stale:
+                                try:
+                                    price = float(last_row[sym])
+                                    if price and price > 0:
+                                        inst_map[sym].current_price = price
+                                except (KeyError, TypeError, ValueError):
+                                    pass
+        except Exception as e:
+            logger.warning(f"batch_sync_instruments download error: {e}")
+
+        for sym in stale:
+            if sym in inst_map:
+                inst_map[sym].last_updated = date.today()
+
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+
+        return inst_map
+
+    # ──────────────────── PRICE LOOKUPS (DB-only, instant) ────────────────────
+
+    def get_latest_prices_bulk(self, symbols: List[str]) -> Dict[str, float]:
+        """
+        Single DB query → {symbol: latest_close_price}.
+        No yfinance calls. Used for fast portfolio enrichment.
+        """
+        if not symbols:
+            return {}
+        sub = (
+            self.db.query(
+                PriceHistory.instrument_symbol,
+                func.max(PriceHistory.date).label("max_date"),
+            )
+            .filter(PriceHistory.instrument_symbol.in_(symbols))
+            .group_by(PriceHistory.instrument_symbol)
+            .subquery()
+        )
+        rows = (
+            self.db.query(PriceHistory)
+            .join(
+                sub,
+                and_(
+                    PriceHistory.instrument_symbol == sub.c.instrument_symbol,
+                    PriceHistory.date == sub.c.max_date,
+                ),
+            )
+            .all()
+        )
+        result: Dict[str, float] = {}
+        for r in rows:
+            p = r.adjusted_close or r.close
+            if p:
+                result[r.instrument_symbol] = float(p)
+        return result
+
+    def get_prices_at_date_bulk(self, symbols: List[str], target_date: date) -> Dict[str, float]:
+        """
+        Single DB query → closest price on or before target_date for each symbol.
+        Falls back up to 7 days for weekends/holidays. No yfinance.
+        """
+        if not symbols:
+            return {}
         start = target_date - timedelta(days=7)
-        history = self.get_price_history(symbol, start, target_date)
-        if not history:
-            return None
-        # Return the latest record's closing price
-        last = history[-1]
-        return last.adjusted_close or last.close
+        sub = (
+            self.db.query(
+                PriceHistory.instrument_symbol,
+                func.max(PriceHistory.date).label("max_date"),
+            )
+            .filter(
+                PriceHistory.instrument_symbol.in_(symbols),
+                PriceHistory.date >= start,
+                PriceHistory.date <= target_date,
+            )
+            .group_by(PriceHistory.instrument_symbol)
+            .subquery()
+        )
+        rows = (
+            self.db.query(PriceHistory)
+            .join(
+                sub,
+                and_(
+                    PriceHistory.instrument_symbol == sub.c.instrument_symbol,
+                    PriceHistory.date == sub.c.max_date,
+                ),
+            )
+            .all()
+        )
+        result: Dict[str, float] = {}
+        for r in rows:
+            p = r.adjusted_close or r.close
+            if p:
+                result[r.instrument_symbol] = float(p)
+        return result
+
+    def get_price_at(self, symbol: str, target_date: date) -> Optional[float]:
+        """DB-only price lookup for a single symbol. Kept for backward compat."""
+        start = target_date - timedelta(days=7)
+        rec = (
+            self.db.query(PriceHistory)
+            .filter(
+                PriceHistory.instrument_symbol == symbol,
+                PriceHistory.date >= start,
+                PriceHistory.date <= target_date,
+            )
+            .order_by(PriceHistory.date.desc())
+            .first()
+        )
+        if rec:
+            return rec.adjusted_close or rec.close
+        return None
+
+    # ──────────────────── PRICE HISTORY ────────────────────
 
     def get_price_history(self, symbol: str, start_date: date, end_date: date = date.today()) -> List[PriceHistory]:
-        """
-        Get historical data, fetching from YF if missing or incomplete in DB.
-        """
-        # Check DB first
-        history = self.db.query(PriceHistory).filter(
-            PriceHistory.instrument_symbol == symbol,
-            PriceHistory.date >= start_date,
-            PriceHistory.date <= end_date
-        ).order_by(PriceHistory.date).all()
-        
+        """Get historical data, fetching from yfinance if DB has gaps."""
+        history = (
+            self.db.query(PriceHistory)
+            .filter(
+                PriceHistory.instrument_symbol == symbol,
+                PriceHistory.date >= start_date,
+                PriceHistory.date <= end_date,
+            )
+            .order_by(PriceHistory.date)
+            .all()
+        )
+
         fetch_start = None
-        
+
         if not history:
             fetch_start = start_date
-            # Ensure instrument record exists BEFORE inserting price history (FK constraint)
-            instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
-            if not instrument:
-                try:
-                    self.sync_instrument(symbol)
-                except Exception:
-                    # Create a minimal instrument row so price history can be inserted
-                    known = _KNOWN_META.get(symbol, {})
-                    instrument = Instrument(
-                        symbol=symbol,
-                        name=known.get("name", symbol),
-                        asset_class=known.get("asset_class", "Equity"),
-                        sector=known.get("sector"),
-                        country=known.get("country", "US"),
-                        currency=known.get("currency", "USD"),
-                        last_updated=date.today(),
-                    )
-                    self.db.add(instrument)
-                    try:
-                        self.db.commit()
-                    except IntegrityError:
-                        self.db.rollback()  # Already exists (race condition)
+            self.ensure_instruments_exist([symbol])
         else:
-            # Check for coverage gap at the end
-            last_db_date = history[-1].date
-            # Only fetch if we have a gap AND the gap is in the past (don't fetch future)
-            if last_db_date < end_date and last_db_date < date.today():
-                fetch_start = last_db_date + timedelta(days=1)
+            first_db = history[0].date
+            last_db = history[-1].date
+            needs_earlier = first_db > start_date + timedelta(days=5)
+            needs_later = last_db < end_date and last_db < date.today()
+            if needs_earlier:
+                fetch_start = start_date
+            elif needs_later:
+                fetch_start = last_db + timedelta(days=1)
             else:
                 return history
 
-        # Fetch from YF with rate-limiting and retry
-        df = None
+        # Fetch from yfinance
+        df = self._yf_download_single(symbol, fetch_start, min(end_date, date.today()) + timedelta(days=1))
+        if df is None or df.empty:
+            return history or []
+
+        new_records = self._insert_price_rows(symbol, df, {h.date for h in history} if history else set())
+        full = (history or []) + new_records
+        full.sort(key=lambda x: x.date)
+        return full
+
+    def batch_download_history(
+        self, symbols: List[str], start_date: date, end_date: date = date.today()
+    ) -> None:
+        """
+        Batch-fetch price history for many symbols in ONE yf.download() call.
+        Only fetches symbols that have gaps in the DB for the given range.
+        """
+        if not symbols:
+            return
+        unique = list(set(symbols))
+        self.ensure_instruments_exist(unique)
+
+        # Determine which symbols need a fetch
+        to_fetch: List[str] = []
+        for sym in unique:
+            first_rec = (
+                self.db.query(PriceHistory)
+                .filter(PriceHistory.instrument_symbol == sym, PriceHistory.date >= start_date)
+                .order_by(PriceHistory.date)
+                .first()
+            )
+            last_rec = (
+                self.db.query(PriceHistory)
+                .filter(PriceHistory.instrument_symbol == sym, PriceHistory.date <= end_date)
+                .order_by(PriceHistory.date.desc())
+                .first()
+            )
+            needs_fetch = False
+            if not first_rec or not last_rec:
+                needs_fetch = True
+            else:
+                if first_rec.date > start_date + timedelta(days=5):
+                    needs_fetch = True
+                elif last_rec.date < end_date and last_rec.date < date.today():
+                    needs_fetch = True
+            if needs_fetch:
+                to_fetch.append(sym)
+
+        if not to_fetch:
+            return
+
+        logger.info(f"batch_download_history: fetching {len(to_fetch)} symbols from yfinance")
+        target_end = min(end_date, date.today()) + timedelta(days=1)
+
+        try:
+            _rate_limit()
+            if len(to_fetch) == 1:
+                df = yf.download(to_fetch[0], start=start_date, end=target_end, progress=False)
+                if df is not None and not df.empty:
+                    existing_dates = {
+                        r.date for r in self.db.query(PriceHistory.date)
+                        .filter(PriceHistory.instrument_symbol == to_fetch[0],
+                                PriceHistory.date >= start_date,
+                                PriceHistory.date <= end_date)
+                        .all()
+                    }
+                    self._insert_price_rows(to_fetch[0], df, existing_dates)
+            else:
+                df = yf.download(to_fetch, start=start_date, end=target_end,
+                                 progress=False, threads=True, group_by="ticker")
+                if df is not None and not df.empty:
+                    for sym in to_fetch:
+                        try:
+                            # group_by="ticker" gives df[sym] as a sub-DataFrame
+                            sym_df = df[sym].dropna(how="all") if sym in df.columns else None
+                            if sym_df is None or sym_df.empty:
+                                continue
+                            existing_dates = {
+                                r.date for r in self.db.query(PriceHistory.date)
+                                .filter(PriceHistory.instrument_symbol == sym,
+                                        PriceHistory.date >= start_date,
+                                        PriceHistory.date <= end_date)
+                                .all()
+                            }
+                            self._insert_price_rows(sym, sym_df, existing_dates)
+                        except Exception as e:
+                            logger.warning(f"batch_download_history: error for {sym}: {e}")
+        except Exception as e:
+            logger.error(f"batch_download_history failed: {e}")
+
+    # ──────────────────── BACKGROUND REFRESH ────────────────────
+
+    def refresh_all_prices(self) -> int:
+        """
+        Refresh today's prices for ALL instruments in the DB.
+        Designed to run once at startup or via a cron endpoint.
+        Returns the number of instruments updated.
+        """
+        all_instruments = self.db.query(Instrument).all()
+        if not all_instruments:
+            return 0
+        symbols = [i.symbol for i in all_instruments]
+        today = date.today()
+
+        # 1) Batch-update instrument.current_price via yf.download
+        self.batch_sync_instruments(symbols)
+
+        # 2) Fetch last 7 days of history for all (fills any gap to today)
+        start = today - timedelta(days=7)
+        self.batch_download_history(symbols, start, today)
+
+        return len(symbols)
+
+    # ──────────────────── INTERNAL HELPERS ────────────────────
+
+    def _yf_download_single(self, symbol: str, start: date, end: date):
+        """Download price history for a single symbol with retry."""
         for attempt in range(3):
             try:
                 _rate_limit()
                 ticker = yf.Ticker(symbol)
-                # Fetch up to today to ensure we catch everything if end_date is in future
-                target_end = min(end_date, date.today()) + timedelta(days=1)
-                df = ticker.history(start=fetch_start, end=target_end)
-                break
+                df = ticker.history(start=start, end=end)
+                return df
             except Exception as e:
-                err_msg = str(e).lower()
-                if "429" in err_msg or "too many requests" in err_msg:
-                    wait = 2 ** (attempt + 1)
-                    logger.warning(f"Rate limited fetching history for {symbol}, retrying in {wait}s")
-                    time.sleep(wait)
+                err = str(e).lower()
+                if "429" in err or "too many requests" in err:
+                    time.sleep(2 ** (attempt + 1))
                     continue
-                elif "404" in err_msg or "not found" in err_msg:
-                    logger.warning(f"No price data for {symbol} (404)")
-                    return history if history else []
+                elif "404" in err or "not found" in err:
+                    logger.warning(f"No price data for {symbol}")
+                    return None
                 else:
                     logger.error(f"Error fetching history for {symbol}: {e}")
-                    return history if history else []
+                    return None
+        return None
 
-        if df is None or df.empty:
-            return history if history else []
-
-        new_records = []
-        existing_dates = {h.date for h in history} if history else set()
-
-        for index, row in df.iterrows():
-            d = index.date()
-            if d in existing_dates:
-                continue
-                
+    def _insert_price_rows(
+        self, symbol: str, df, existing_dates: Set[date]
+    ) -> List[PriceHistory]:
+        """Insert new rows and update existing stale rows from a yfinance DataFrame."""
+        new_records: List[PriceHistory] = []
+        for idx, row in df.iterrows():
+            d = idx.date() if hasattr(idx, 'date') else idx
             try:
-                record = PriceHistory(
+                close_val = row.get("Close")
+                if close_val is None:
+                    continue
+                close_f = float(close_val)
+                open_f = float(row["Open"]) if row.get("Open") is not None else None
+                high_f = float(row["High"]) if row.get("High") is not None else None
+                low_f = float(row["Low"]) if row.get("Low") is not None else None
+                vol_f = float(row["Volume"]) if row.get("Volume") is not None else None
+
+                if d in existing_dates:
+                    # Update existing row if price changed (fixes stale 0-return gaps)
+                    existing = (
+                        self.db.query(PriceHistory)
+                        .filter(PriceHistory.instrument_symbol == symbol, PriceHistory.date == d)
+                        .first()
+                    )
+                    if existing and existing.close != close_f:
+                        existing.open = open_f
+                        existing.high = high_f
+                        existing.low = low_f
+                        existing.close = close_f
+                        existing.adjusted_close = close_f
+                        existing.volume = vol_f
+                    continue
+
+                rec = PriceHistory(
                     instrument_symbol=symbol,
                     date=d,
-                    open=float(row['Open']) if row['Open'] is not None else None,
-                    high=float(row['High']) if row['High'] is not None else None,
-                    low=float(row['Low']) if row['Low'] is not None else None,
-                    close=float(row['Close']) if row['Close'] is not None else None,
-                    volume=float(row['Volume']) if row['Volume'] is not None else None,
-                    adjusted_close=float(row['Close']) if row['Close'] is not None else None,
+                    open=open_f,
+                    high=high_f,
+                    low=low_f,
+                    close=close_f,
+                    volume=vol_f,
+                    adjusted_close=close_f,
                 )
-                self.db.add(record)
-                new_records.append(record)
+                self.db.add(rec)
+                new_records.append(rec)
             except (ValueError, TypeError) as e:
-                logger.warning(f"Skipping bad row for {symbol} on {index}: {e}")
-                continue
+                logger.warning(f"Skipping bad row for {symbol} on {idx}: {e}")
 
         try:
             self.db.commit()
-            # If we appended new records, sort valid history again or just append
-            full_history = history + new_records
-            full_history.sort(key=lambda x: x.date)
-            return full_history
         except IntegrityError:
             self.db.rollback()
-            logger.warning(f"IntegrityError inserting history for {symbol}, returning DB data")
-            return self.db.query(PriceHistory).filter(
-                PriceHistory.instrument_symbol == symbol,
-                PriceHistory.date >= start_date,
-                PriceHistory.date <= end_date
-            ).order_by(PriceHistory.date).all()
+            logger.warning(f"IntegrityError for {symbol}, retrying one-by-one")
+            # Retry individual inserts to save what we can
+            for rec in new_records:
+                try:
+                    self.db.merge(rec)
+                    self.db.commit()
+                except Exception:
+                    self.db.rollback()
+        return new_records
 

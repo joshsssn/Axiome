@@ -76,23 +76,26 @@ def read_portfolio(
 
     md_service = MarketDataService(db)
 
-    # Sync instruments so we have fresh metadata (name, sector, price)
-    synced: dict = {}
-    for p in portfolio.positions:
-        sym = p.instrument_symbol
-        if sym not in synced:
-            try:
-                synced[sym] = md_service.sync_instrument(sym)
-            except Exception:
-                synced[sym] = p.instrument
+    # ── Batch: ensure instrument rows exist (DB only, no yfinance) ──
+    symbols = list({p.instrument_symbol for p in portfolio.positions})
+    inst_map = md_service.ensure_instruments_exist(symbols)
+
+    # ── Batch: get latest prices + previous day prices (2 DB queries, no yfinance) ──
+    latest_prices = md_service.get_latest_prices_bulk(symbols)
+
+    today = date.today()
+    td = _last_trading_day(today)
+    prev_td = _prev_trading_day(td)
+    prev_prices = md_service.get_prices_at_date_bulk(symbols, prev_td)
 
     # Enrich positions
     enriched_positions = []
     total_value = 0.0
     for p in portfolio.positions:
-        inst = synced.get(p.instrument_symbol) or p.instrument
-        if p.pricing_mode == 'market' and inst and inst.current_price:
-            cp = inst.current_price
+        inst = inst_map.get(p.instrument_symbol) or p.instrument
+        # Determine current price: market mode uses DB latest, otherwise use cached or entry
+        if p.pricing_mode == 'market':
+            cp = latest_prices.get(p.instrument_symbol) or (inst.current_price if inst else None) or p.entry_price
         elif p.current_price:
             cp = p.current_price
         else:
@@ -116,28 +119,20 @@ def read_portfolio(
         })
 
     # Calculate weights, pnl, daily_change
-    # Compute daily PnL using last trading day vs previous trading day
-    today = date.today()
-    td = _last_trading_day(today)
-    prev_td = _prev_trading_day(td)
     daily_pnl_total = 0.0
     for ep in enriched_positions:
         mkt_val = ep["quantity"] * ep["current_price"]
         ep["weight"] = round((mkt_val / total_value * 100) if total_value > 0 else 0, 2)
         ep["pnl"] = round((ep["current_price"] - ep["entry_price"]) * ep["quantity"], 2)
-        cost = ep["entry_price"] * ep["quantity"]
         ep["pnl_percent"] = round(((ep["current_price"] - ep["entry_price"]) / ep["entry_price"] * 100) if ep["entry_price"] > 0 else 0, 2)
-        # Get previous trading day price for daily change
-        try:
-            prev_price = md_service.get_price_at(ep["instrument_symbol"], prev_td) or ep["current_price"]
-        except Exception:
-            prev_price = ep["current_price"]
+
+        prev_price = prev_prices.get(ep["instrument_symbol"]) or ep["current_price"]
         if prev_price and prev_price > 0:
             daily_chg = ((ep["current_price"] - prev_price) / prev_price) * 100
         else:
             daily_chg = 0.0
         ep["daily_change"] = round(daily_chg, 2)
-        daily_pnl_total += ep["quantity"] * (ep["current_price"] - (prev_price or ep["current_price"]))
+        daily_pnl_total += ep["quantity"] * (ep["current_price"] - prev_price)
 
     # Enrich collaborators with username/email
     enriched_collabs = []

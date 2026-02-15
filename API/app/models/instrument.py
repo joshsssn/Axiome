@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, Date, Integer, ForeignKey
+from sqlalchemy import Column, String, Float, Date, Integer, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
 
@@ -16,6 +16,10 @@ class Instrument(Base):
 
 class PriceHistory(Base):
     __tablename__ = "price_history"
+    __table_args__ = (
+        UniqueConstraint('instrument_symbol', 'date', name='uq_price_history_symbol_date'),
+        Index('ix_price_history_symbol_date', 'instrument_symbol', 'date'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     instrument_symbol = Column(String, ForeignKey("instruments.symbol"), index=True)

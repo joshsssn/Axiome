@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { Activity, Eye, EyeOff, AlertCircle, ArrowRight } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, ArrowRight } from 'lucide-react';
+import axiomeLogo from '@/img/axiome-logo.png';
 
 export function Login() {
   const { login } = useAuth();
@@ -32,11 +33,8 @@ export function Login() {
 
       <div className="w-full max-w-md relative z-10">
         {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/20">
-            <Activity className="w-7 h-7 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-white">PortfolioTracker</h1>
+        <div className="text-center mb-10">
+          <img src={axiomeLogo} alt="Axiome" className="w-64 h-auto mx-auto mb-4" />
           <p className="text-sm text-slate-500 mt-1">Multi-Asset Analytics Platform</p>
         </div>
 

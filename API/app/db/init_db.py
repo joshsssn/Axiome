@@ -19,6 +19,13 @@ def init_db(db: Session) -> None:
     _add_column_if_not_exists(db, "users", "organization", "VARCHAR")
     _add_column_if_not_exists(db, "users", "avatar_url", "VARCHAR")
 
+    # Deduplicate price_history rows BEFORE creating unique constraint
+    _deduplicate_price_history(db)
+
+    # Add composite index & unique constraint on price_history (idempotent)
+    _create_index_if_not_exists(db, "ix_price_history_symbol_date", "price_history", "instrument_symbol, date")
+    _create_unique_constraint_if_not_exists(db, "uq_price_history_symbol_date", "price_history", "instrument_symbol, date")
+
     # Check by email OR username to avoid unique constraint violations
     user = db.query(User).filter(
         (User.email == "admin@portfolio.io") | (User.username == "admin")
@@ -145,3 +152,41 @@ def _add_column_if_not_exists(db: Session, table: str, column: str, col_type: st
     except Exception as e:
         db.rollback()
         print(f"Column migration skipped ({table}.{column}): {e}")
+
+
+def _deduplicate_price_history(db: Session) -> None:
+    """Remove duplicate (instrument_symbol, date) rows, keeping the one with the lowest id."""
+    try:
+        result = db.execute(text(
+            "DELETE FROM price_history "
+            "WHERE id NOT IN ("
+            "  SELECT MIN(id) FROM price_history GROUP BY instrument_symbol, date"
+            ")"
+        ))
+        db.commit()
+        removed = result.rowcount
+        if removed > 0:
+            print(f"Deduplicated price_history: removed {removed} duplicate rows")
+    except Exception as e:
+        db.rollback()
+        print(f"Deduplication skipped: {e}")
+
+
+def _create_index_if_not_exists(db: Session, index_name: str, table: str, columns: str) -> None:
+    """Create a DB index if it doesn't already exist."""
+    try:
+        db.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({columns})"))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Index migration skipped ({index_name}): {e}")
+
+
+def _create_unique_constraint_if_not_exists(db: Session, constraint_name: str, table: str, columns: str) -> None:
+    """Create a unique index (acts as unique constraint) if it doesn't exist."""
+    try:
+        db.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {constraint_name} ON {table} ({columns})"))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Unique constraint migration skipped ({constraint_name}): {e}")

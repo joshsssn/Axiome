@@ -1,12 +1,14 @@
 import {
   LayoutDashboard, Briefcase, TrendingUp, ShieldAlert,
-  Target, Zap, Users, ChevronLeft, ChevronRight, Activity, ListPlus,
-  ArrowLeftRight, Share2, UserCircle, LogOut
+  Target, Zap, Users, ChevronLeft, ChevronRight, ListPlus,
+  ArrowLeftRight, Share2, UserCircle, LogOut, GitCompareArrows, History, Info
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useAuth } from '@/context/AuthContext';
+import axiomeLogo from '@/img/axiome-logo.png';
+import axiomeFavicon from '@/img/logo.ico';
 
-export type Page = 'dashboard' | 'positions' | 'transactions' | 'sharing' | 'portfolio' | 'analytics' | 'risk' | 'optimization' | 'stress' | 'admin' | 'profile';
+export type Page = 'dashboard' | 'positions' | 'transactions' | 'sharing' | 'portfolio' | 'analytics' | 'risk' | 'optimization' | 'stress' | 'comparison' | 'backtest' | 'admin' | 'profile' | 'about';
 
 const navItems: { id: Page; label: string; icon: React.ElementType; section?: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'Overview' },
@@ -17,9 +19,12 @@ const navItems: { id: Page; label: string; icon: React.ElementType; section?: st
   { id: 'risk', label: 'Risk', icon: ShieldAlert, section: 'Analytics' },
   { id: 'optimization', label: 'Optimization', icon: Target, section: 'Tools' },
   { id: 'stress', label: 'Stress Test', icon: Zap, section: 'Tools' },
+  { id: 'comparison', label: 'Comparison', icon: GitCompareArrows, section: 'Tools' },
+  { id: 'backtest', label: 'Backtesting', icon: History, section: 'Tools' },
   { id: 'sharing', label: 'Sharing', icon: Share2, section: 'Tools' },
   { id: 'profile', label: 'Profile', icon: UserCircle, section: 'System' },
   { id: 'admin', label: 'Admin', icon: Users, section: 'System' },
+  { id: 'about', label: 'About', icon: Info, section: 'System' },
 ];
 
 interface SidebarProps {
@@ -43,15 +48,15 @@ export function Sidebar({ currentPage, onNavigate, collapsed, onToggle }: Sideba
       collapsed ? 'w-16' : 'w-60'
     )}>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 h-16 border-b border-slate-800 shrink-0">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shrink-0">
-          <Activity className="w-4 h-4 text-white" />
-        </div>
-        {!collapsed && (
-          <div className="overflow-hidden">
-            <span className="text-sm font-bold text-white whitespace-nowrap">PortfolioTracker</span>
-          </div>
-        )}
+      <div className="flex items-center justify-center h-20 border-b border-slate-800 shrink-0 overflow-hidden">
+        <img
+          src={collapsed ? axiomeFavicon : axiomeLogo}
+          alt="Axiome"
+          className={cn(
+            "transition-all duration-300 object-contain mx-auto",
+            collapsed ? "w-10 h-10" : "max-w-[80%] h-16"
+          )}
+        />
       </div>
 
       {/* Navigation */}
