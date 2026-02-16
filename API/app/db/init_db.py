@@ -136,8 +136,8 @@ def _seed_default_portfolios(db: Session, owner_id: int) -> None:
                     symbol=sym,
                     name=sym, # Default name is symbol
                     currency=pf_data["currency"],
-                    type="stock", 
-                    source="yahoo"
+                    asset_class="stock", 
+                    # source="yahoo" # Not in model
                 )
                 db.add(instrument)
                 db.flush()
