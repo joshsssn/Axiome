@@ -59,6 +59,9 @@ def _seed_default_portfolios(db: Session, owner_id: int) -> None:
     """Create 4 default portfolios with sample positions for the admin user."""
     today = date.today()
     one_year_ago = today - timedelta(days=365)
+    
+    # Import Instrument model here to avoid circular imports if any
+    from app.models.instrument import Instrument
 
     portfolios_data = [
         {
@@ -126,6 +129,19 @@ def _seed_default_portfolios(db: Session, owner_id: int) -> None:
         db.flush()
 
         for sym, qty, price in pf_data["positions"]:
+            # Check if instrument exists, if not create it
+            instrument = db.query(Instrument).filter(Instrument.symbol == sym).first()
+            if not instrument:
+                instrument = Instrument(
+                    symbol=sym,
+                    name=sym, # Default name is symbol
+                    currency=pf_data["currency"],
+                    type="stock", 
+                    source="yahoo"
+                )
+                db.add(instrument)
+                db.flush()
+
             pos = Position(
                 portfolio_id=portfolio.id,
                 instrument_symbol=sym,
