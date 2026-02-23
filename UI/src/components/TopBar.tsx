@@ -1,13 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { usePortfolio } from '@/context/PortfolioContext';
-import { ChevronDown, Plus, Briefcase, DollarSign, X, Trash2, Pencil, Settings } from 'lucide-react';
+import { ChevronDown, Plus, Briefcase, DollarSign, X, Trash2, Settings } from 'lucide-react';
 
 export function TopBar() {
   const { portfolios, activePortfolio, activePortfolioId, setActivePortfolioId, createPortfolio, deletePortfolio, updatePortfolioMeta } = usePortfolio();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
-  
+
   // Create Form State
   const [formName, setFormName] = useState('');
   const [formDesc, setFormDesc] = useState('');
@@ -93,7 +93,7 @@ export function TopBar() {
                 </div>
                 <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
               </button>
-              
+
               {/* Dropdown Content */}
               {dropdownOpen && (
                 <div className="absolute left-0 top-full mt-1 w-80 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">

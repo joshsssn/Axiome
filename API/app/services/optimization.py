@@ -29,10 +29,18 @@ class OptimizationService:
     def _fetch_prices(self, symbols: List[str]) -> pd.DataFrame:
         end_date = date.today()
         start_date = end_date - timedelta(days=365 * 2)
+
+        # Batch update/fetch
+        try:
+            self.md_service.batch_sync_instruments(symbols)
+            self.md_service.batch_download_history(symbols, start_date, end_date)
+        except Exception as e:
+            logger.error(f"Batch fetch failed: {e}")
+
         price_data: Dict[str, pd.Series] = {}
         for sym in symbols:
             try:
-                self.md_service.sync_instrument(sym)
+                # Still use get_price_history in case batch missed something or for DB retrieval
                 history = self.md_service.get_price_history(sym, start_date, end_date)
                 if history:
                     dates = [h.date for h in history]
