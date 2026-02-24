@@ -42,6 +42,9 @@ class PositionEnriched(BaseModel):
     sector: str = "Other"
     country: str = "US"
     currency: str = "USD"
+    original_currency: str = "USD"
+    original_entry_price: float = 0.0
+    fx_rate: float = 1.0
     weight: float = 0.0
     pnl: float = 0.0
     pnl_percent: float = 0.0

@@ -53,6 +53,51 @@ def _cache_set(key: str, value: Any):
             del _price_cache[k]
 
 
+# ────────────── yfinance value normalization ──────────────
+_QUOTE_TYPE_MAP: Dict[str, str] = {
+    "EQUITY": "Equity",
+    "STOCK": "Equity",
+    "ETF": "ETF",
+    "MUTUALFUND": "ETF",
+    "FUTURE": "Futures",
+    "OPTION": "Option",
+    "INDEX": "Index",
+    "CRYPTOCURRENCY": "Equity",
+    "CURRENCY": "Equity",
+}
+
+_SECTOR_MAP: Dict[str, str] = {
+    "technology": "Technology",
+    "healthcare": "Healthcare",
+    "health care": "Healthcare",
+    "financial services": "Financials",
+    "financials": "Financials",
+    "consumer cyclical": "Consumer Discretionary",
+    "consumer discretionary": "Consumer Discretionary",
+    "consumer defensive": "Consumer Staples",
+    "consumer staples": "Consumer Staples",
+    "energy": "Energy",
+    "industrials": "Industrials",
+    "basic materials": "Materials",
+    "materials": "Materials",
+    "utilities": "Utilities",
+    "real estate": "Real Estate",
+    "communication services": "Telecom",
+    "telecom": "Telecom",
+    "telecommunications": "Telecom",
+}
+
+def _normalize_asset_class(raw: str | None) -> str:
+    if not raw:
+        return "Equity"
+    return _QUOTE_TYPE_MAP.get(raw.upper().strip(), "Equity")
+
+def _normalize_sector(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    return _SECTOR_MAP.get(raw.lower().strip(), raw.title())
+
+
 # ────────────── known metadata fallback ──────────────
 _KNOWN_META: Dict[str, Dict[str, str]] = {
     "AAPL": {"name": "Apple Inc.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
@@ -126,12 +171,156 @@ _KNOWN_META: Dict[str, Dict[str, str]] = {
 }
 
 
+# ────────────── Yahoo Finance exchange → currency mapping ──────────────
+_EXCHANGE_CURRENCY: Dict[str, str] = {
+    # US
+    "NYQ": "USD", "NMS": "USD", "NGM": "USD", "NCM": "USD", "PCX": "USD",
+    "BTS": "USD", "ASE": "USD", "OQX": "USD", "PNK": "USD", "OPR": "USD",
+    "NAS": "USD", "CCC": "USD",
+    # Europe – EUR
+    "MIL": "EUR", "PAR": "EUR", "GER": "EUR", "FRA": "EUR", "MUN": "EUR",
+    "AMS": "EUR", "MCE": "EUR", "VIE": "EUR", "BER": "EUR", "DUS": "EUR",
+    "HAM": "EUR", "STU": "EUR", "HEL": "EUR", "LIS": "EUR", "ATH": "EUR",
+    "IOB": "EUR", "DXE": "EUR", "CXE": "EUR",
+    # Europe – other
+    "EBS": "CHF", "ZRH": "CHF",                        # Swiss
+    "LSE": "GBp", "LON": "GBp",                        # London (pence)
+    "CPH": "DKK",                                       # Copenhagen
+    "OSL": "NOK",                                       # Oslo
+    "STO": "SEK",                                       # Stockholm
+    # Asia
+    "JPX": "JPY", "TYO": "JPY",
+    "HKG": "HKD",
+    "KSC": "KRW", "KOE": "KRW",
+    "BSE": "INR", "NSI": "INR",
+    "SET": "THB",
+    "KLS": "MYR",
+    "SGX": "SGD",
+    # Americas
+    "TSE": "CAD", "VAN": "CAD", "NEO": "CAD",
+    "SAO": "BRL",
+    "MEX": "MXN",
+    # Oceania
+    "ASX": "AUD", "CXA": "AUD",
+}
+
+# currency → Yahoo Finance suffixes to try (most common exchanges first)
+_CURRENCY_SUFFIXES: Dict[str, List[str]] = {
+    "EUR": [".PA", ".DE", ".MI", ".AS", ".MC", ".BR", ".VI", ".HE", ".LS"],
+    "CHF": [".SW"],
+    "GBP": [".L"],
+    "GBp": [".L"],
+    "DKK": [".CO"],
+    "NOK": [".OL"],
+    "SEK": [".ST"],
+    "JPY": [".T"],
+    "HKD": [".HK"],
+    "CAD": [".TO", ".V"],
+    "AUD": [".AX"],
+    "SGD": [".SI"],
+    "KRW": [".KS", ".KQ"],
+    "INR": [".BO", ".NS"],
+}
+
+
+def _exchange_to_currency(exchange_code: str) -> Optional[str]:
+    """Map a Yahoo Finance exchange code to its trading currency."""
+    ccy = _EXCHANGE_CURRENCY.get(exchange_code)
+    if ccy == "GBp":
+        return "GBP"
+    return ccy
+
+
 # ═══════════════════════════════════════════════════════════════
 #  MarketDataService
 # ═══════════════════════════════════════════════════════════════
 class MarketDataService:
     def __init__(self, db: Session):
         self.db = db
+
+    # ──────────────── RESOLVE SYMBOL FOR CURRENCY ────────────────
+
+    def resolve_symbol_for_currency(
+        self, raw_symbol: str, currency_hint: str
+    ) -> str:
+        """
+        Given a bare ticker (e.g. 'RACE') and a target currency ('EUR'),
+        find the Yahoo Finance symbol on the exchange that trades in that
+        currency (e.g. 'RACE.MI').
+
+        Strategy:
+          1. Check if the bare symbol already trades in the target currency.
+          2. Use yf.Search() to find all listings → pick by exchange→currency.
+          3. Try common exchange suffixes for that currency.
+          4. Fall back to the original symbol if nothing matches.
+        """
+        cache_key = f"resolve:{raw_symbol}:{currency_hint}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        # Normalize
+        sym = raw_symbol.strip().upper()
+        hint = currency_hint.strip().upper()
+
+        # If the raw symbol already has an exchange suffix, keep it
+        if "." in sym and len(sym.split(".")[-1]) <= 3:
+            _cache_set(cache_key, sym)
+            return sym
+
+        # 1) Search Yahoo Finance for candidate listings
+        try:
+            _rate_limit()
+            search_results = yf.Search(sym, max_results=10)
+            candidates = search_results.quotes if search_results.quotes else []
+
+            for candidate in candidates:
+                c_sym = candidate.get("symbol", "")
+                c_exch = candidate.get("exchange", "")
+                c_base = c_sym.split(".")[0].upper()
+
+                # The base ticker must match (ignore exchange suffix)
+                if c_base != sym and not c_base.startswith(sym):
+                    continue
+
+                exch_ccy = _exchange_to_currency(c_exch)
+                if exch_ccy and exch_ccy == hint:
+                    logger.info(
+                        f"resolve_symbol: {raw_symbol}+{currency_hint} → "
+                        f"{c_sym} (via search, exchange={c_exch})"
+                    )
+                    _cache_set(cache_key, c_sym)
+                    return c_sym
+        except Exception as e:
+            logger.warning(f"resolve_symbol: search failed for '{sym}': {e}")
+
+        # 2) Try common exchange suffixes for the hinted currency
+        suffixes = _CURRENCY_SUFFIXES.get(hint, [])
+        for suffix in suffixes:
+            candidate = sym + suffix
+            try:
+                _rate_limit()
+                t = yf.Ticker(candidate)
+                info = t.info
+                if info and info.get("currency", "").upper() == hint:
+                    name = info.get("longName") or info.get("shortName")
+                    if name:
+                        logger.info(
+                            f"resolve_symbol: {raw_symbol}+{currency_hint} → "
+                            f"{candidate} (via suffix probe)"
+                        )
+                        _cache_set(cache_key, candidate)
+                        return candidate
+            except Exception:
+                continue
+
+        # 3) Fall back to original
+        logger.info(
+            f"resolve_symbol: no {currency_hint} listing found for '{sym}', "
+            f"keeping original"
+        )
+        _cache_set(cache_key, sym)
+        return sym
 
     # ──────────────────── INSTRUMENT METADATA ────────────────────
 
@@ -150,8 +339,8 @@ class MarketDataService:
                 result = {
                     "symbol": symbol,
                     "name": info.get("longName") or info.get("shortName"),
-                    "asset_class": info.get("quoteType", "Equity"),
-                    "sector": info.get("sector"),
+                    "asset_class": _normalize_asset_class(info.get("quoteType")),
+                    "sector": _normalize_sector(info.get("sector")),
                     "country": info.get("country"),
                     "currency": info.get("currency"),
                     "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
@@ -171,6 +360,7 @@ class MarketDataService:
         """
         Make sure every symbol has an Instrument row in the DB.
         Uses _KNOWN_META as fallback — **no yfinance call**.
+        Also updates instruments that have placeholder metadata (name == symbol).
         Returns {symbol: Instrument}.
         """
         if not symbols:
@@ -181,6 +371,19 @@ class MarketDataService:
             .all()
         )
         found = {i.symbol: i for i in existing}
+        dirty = False
+
+        # Fix stale instruments that have placeholder data (name == symbol)
+        for inst in existing:
+            meta = _KNOWN_META.get(inst.symbol)
+            if meta and meta.get("name") and (not inst.name or inst.name == inst.symbol):
+                inst.name = meta["name"]
+                inst.sector = meta.get("sector") or inst.sector
+                inst.country = meta.get("country") or inst.country
+                inst.asset_class = meta.get("asset_class") or inst.asset_class
+                inst.currency = meta.get("currency") or inst.currency
+                dirty = True
+
         missing = [s for s in symbols if s not in found]
         for sym in missing:
             meta = _KNOWN_META.get(sym, {})
@@ -195,7 +398,7 @@ class MarketDataService:
             )
             self.db.add(inst)
             found[sym] = inst
-        if missing:
+        if missing or dirty:
             try:
                 self.db.commit()
             except IntegrityError:
@@ -207,11 +410,12 @@ class MarketDataService:
     def sync_instrument(self, symbol: str) -> Optional[Instrument]:
         """
         Ensure instrument exists and is up-to-date.
-        Fast path: if updated today, skip yfinance entirely.
+        Fast path: if updated today AND has real metadata, skip yfinance entirely.
         """
         instrument = self.db.query(Instrument).filter(Instrument.symbol == symbol).first()
 
-        if instrument and instrument.last_updated == date.today():
+        has_real_name = instrument and instrument.name and instrument.name != instrument.symbol
+        if instrument and instrument.last_updated == date.today() and has_real_name:
             return instrument  # already fresh — instant
 
         info = self.get_instrument_info(symbol)
@@ -311,6 +515,73 @@ class MarketDataService:
             self.db.rollback()
 
         return inst_map
+
+    # ──────────────────── FX RATES ────────────────────
+
+    def get_fx_rate(self, from_ccy: str, to_ccy: str) -> float:
+        """
+        Get current FX rate from `from_ccy` to `to_ccy` via yfinance.
+        Returns 1.0 if same currency or on error.
+        """
+        from_ccy = from_ccy.upper().strip()
+        to_ccy = to_ccy.upper().strip()
+        if from_ccy == to_ccy:
+            return 1.0
+
+        cache_key = f"fx:{from_ccy}{to_ccy}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        # Try direct pair
+        pair = f"{from_ccy}{to_ccy}=X"
+        for attempt in range(2):
+            try:
+                _rate_limit()
+                ticker = yf.Ticker(pair)
+                info = ticker.info
+                rate = info.get("regularMarketPrice") or info.get("previousClose")
+                if rate and rate > 0:
+                    _cache_set(cache_key, float(rate))
+                    return float(rate)
+            except Exception as e:
+                err = str(e).lower()
+                if "429" in err or "too many requests" in err:
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                break
+
+        # Try inverse pair as fallback
+        inv_pair = f"{to_ccy}{from_ccy}=X"
+        try:
+            _rate_limit()
+            ticker = yf.Ticker(inv_pair)
+            info = ticker.info
+            inv_rate = info.get("regularMarketPrice") or info.get("previousClose")
+            if inv_rate and inv_rate > 0:
+                rate = 1.0 / float(inv_rate)
+                _cache_set(cache_key, rate)
+                return rate
+        except Exception:
+            pass
+
+        logger.warning(f"FX rate {from_ccy}→{to_ccy} unavailable, using 1.0")
+        return 1.0
+
+    def get_fx_rates_bulk(self, currencies: list, target_ccy: str) -> dict:
+        """
+        Fetch FX rates for a set of source currencies to one target currency.
+        Returns {source_ccy: rate_to_target}.
+        """
+        target_ccy = target_ccy.upper().strip()
+        rates: dict = {}
+        for ccy in set(currencies):
+            ccy = ccy.upper().strip()
+            if ccy == target_ccy:
+                rates[ccy] = 1.0
+            else:
+                rates[ccy] = self.get_fx_rate(ccy, target_ccy)
+        return rates
 
     # ──────────────────── PRICE LOOKUPS (DB-only, instant) ────────────────────
 

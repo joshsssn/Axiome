@@ -66,6 +66,14 @@ export const api = {
             request(`/portfolios/${id}/positions/${posId}`, { method: 'PUT', body: JSON.stringify(data) }),
         deletePosition: (id: number, posId: number) =>
             request(`/portfolios/${id}/positions/${posId}`, { method: 'DELETE' }),
+        importPositions: (id: number, positions: any[]) =>
+            request(`/portfolios/${id}/import`, { method: 'POST', body: JSON.stringify({ positions }) }),
+        findDuplicates: (id: number) =>
+            request(`/portfolios/${id}/positions/duplicates`),
+        mergeDuplicates: (id: number) =>
+            request(`/portfolios/${id}/positions/merge-duplicates`, { method: 'POST' }),
+        removeDuplicates: (id: number) =>
+            request(`/portfolios/${id}/positions/remove-duplicates`, { method: 'POST' }),
 
         // Transactions
         listTransactions: (id: number) => request(`/portfolios/${id}/transactions`),
@@ -117,5 +125,7 @@ export const api = {
     marketData: {
         getPrice: (symbol: string, date: string) => request(`/market-data/price/${symbol}?date=${date}`),
         searchTicker: (query: string) => request(`/market-data/search/${encodeURIComponent(query)}`),
+        validateTickers: (symbols: string[], currencyHints?: (string | null)[]) =>
+            request('/market-data/validate-tickers', { method: 'POST', body: JSON.stringify({ symbols, currency_hints: currencyHints }) }),
     },
 };

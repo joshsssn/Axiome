@@ -35,6 +35,7 @@ interface PortfolioContextType {
   currentUserId: number;
   isLoading: boolean;
   refreshPortfolios: () => void;
+  refreshDetail: () => void;
 }
 
 const PortfolioContext = createContext<PortfolioContextType | null>(null);
@@ -65,7 +66,7 @@ function generateDefaultStressScenarios(positions: Position[]): StressScenario[]
 }
 
 /** Generate stress contribution data from positions */
-function generateStressContributions(positions: Position[]): Array<{symbol: string; crisis2008: number; covid2020: number; rateShock: number}> {
+function generateStressContributions(positions: Position[]): Array<{ symbol: string; crisis2008: number; covid2020: number; rateShock: number }> {
   const seed = positions.reduce((s, p) => s + p.id, 0);
   return positions.slice(0, Math.min(10, positions.length)).map(p => ({
     symbol: p.symbol,
@@ -104,6 +105,9 @@ function mapPosition(p: any): Position {
     sector: p.sector ?? 'Other',
     country: p.country ?? 'US',
     currency: p.currency ?? 'USD',
+    originalCurrency: p.original_currency ?? p.currency ?? 'USD',
+    originalEntryPrice: p.original_entry_price ?? p.entry_price,
+    fxRate: p.fx_rate ?? 1.0,
     quantity: p.quantity,
     entryPrice: p.entry_price,
     currentPrice,
@@ -323,14 +327,24 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
 
   const deletePortfolio = useCallback(async (id: string) => {
     if (!isBackend.current) {
-      setPortfolios(prev => prev.filter(p => p.id !== id));
-      if (activePortfolioId === id) setActivePortfolioId('');
+      setPortfolios(prev => {
+        const remaining = prev.filter(p => p.id !== id);
+        if (activePortfolioId === id) {
+          setActivePortfolioId(remaining[0]?.id ?? '');
+        }
+        return remaining;
+      });
       return;
     }
     try {
       await api.portfolios.delete(parseInt(id));
-      setPortfolios(prev => prev.filter(p => p.id !== id));
-      if (activePortfolioId === id) setActivePortfolioId('');
+      setPortfolios(prev => {
+        const remaining = prev.filter(p => p.id !== id);
+        if (activePortfolioId === id) {
+          setActivePortfolioId(remaining[0]?.id ?? '');
+        }
+        return remaining;
+      });
     } catch (e) { console.error('Delete portfolio failed', e); }
   }, [activePortfolioId]);
 
@@ -520,6 +534,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       currentUserId,
       isLoading,
       refreshPortfolios: refresh,
+      refreshDetail,
     }}>
       {children}
     </PortfolioContext.Provider>

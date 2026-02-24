@@ -89,3 +89,78 @@ def search_ticker(
 
     # Limit results
     return results[:15]
+
+
+from pydantic import BaseModel
+
+class ValidateTickersRequest(BaseModel):
+    symbols: List[str]
+    currency_hints: Optional[List[Optional[str]]] = None
+
+@router.post("/validate-tickers")
+def validate_tickers(
+    body: ValidateTickersRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Validate a list of tickers against yfinance.
+    When currency_hints are provided (parallel array), the backend will
+    resolve tickers to the exchange listing that trades in that currency
+    (e.g. RACE + EUR → RACE.MI on Milan exchange).
+    Returns { valid: [{symbol, name, sector, country, currency, asset_class}], unresolved: [symbol ...] }
+    """
+    md_service = MarketDataService(db)
+    valid = []
+    unresolved = []
+
+    hints = body.currency_hints or []
+
+    for idx, sym in enumerate(body.symbols):
+        sym = sym.strip().upper()
+        if not sym:
+            continue
+
+        currency_hint = hints[idx].strip().upper() if idx < len(hints) and hints[idx] else None
+
+        # If a currency hint is provided and it's not USD, try to resolve
+        # the symbol to the correct exchange listing
+        resolved_sym = sym
+        if currency_hint and currency_hint != "USD":
+            resolved_sym = md_service.resolve_symbol_for_currency(sym, currency_hint)
+            logger.info(f"validate_tickers: {sym} + hint={currency_hint} → {resolved_sym}")
+
+        # Try known meta first (only for the original symbol)
+        meta = _KNOWN_META.get(resolved_sym) or _KNOWN_META.get(sym)
+        if meta and meta.get("name"):
+            # If we resolved to a different symbol, still use the resolved one
+            final_sym = resolved_sym if resolved_sym != sym else sym
+            valid.append({
+                "symbol": final_sym,
+                "name": meta.get("name", final_sym),
+                "sector": meta.get("sector", ""),
+                "country": meta.get("country", ""),
+                "asset_class": meta.get("asset_class", "Equity"),
+                "currency": meta.get("currency", "USD"),
+            })
+            continue
+
+        # Try yfinance with the resolved symbol
+        try:
+            info = md_service.get_instrument_info(resolved_sym)
+            if info and info.get("name"):
+                valid.append({
+                    "symbol": resolved_sym,
+                    "name": info.get("name", resolved_sym),
+                    "sector": info.get("sector", ""),
+                    "country": info.get("country", ""),
+                    "asset_class": info.get("asset_class", "Equity"),
+                    "currency": info.get("currency", "USD"),
+                })
+                continue
+        except Exception as e:
+            logger.warning(f"validate_tickers: yfinance lookup failed for '{resolved_sym}': {e}")
+        unresolved.append(sym)
+
+    return {"valid": valid, "unresolved": unresolved}
+

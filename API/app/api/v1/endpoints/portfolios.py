@@ -1,4 +1,5 @@
-from typing import List, Any
+from typing import List, Any, Optional
+from pydantic import BaseModel as PydanticBaseModel
 from datetime import date, timedelta
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -88,9 +89,8 @@ def read_portfolio(
     prev_td = _prev_trading_day(td)
     prev_prices = md_service.get_prices_at_date_bulk(symbols, prev_td)
 
-    # Enrich positions
+    # Enrich positions (native currency values first)
     enriched_positions = []
-    total_value = 0.0
     for p in portfolio.positions:
         inst = inst_map.get(p.instrument_symbol) or p.instrument
         # Determine current price: market mode uses DB latest, otherwise use cached or entry
@@ -100,8 +100,7 @@ def read_portfolio(
             cp = p.current_price
         else:
             cp = p.entry_price
-        val = p.quantity * cp
-        total_value += val
+        inst_ccy = (inst.currency if inst and inst.currency else "USD")
         enriched_positions.append({
             "id": p.id,
             "portfolio_id": p.portfolio_id,
@@ -115,24 +114,44 @@ def read_portfolio(
             "asset_class": (inst.asset_class if inst and inst.asset_class else "Equity"),
             "sector": (inst.sector if inst and inst.sector else "Other"),
             "country": (inst.country if inst and inst.country else "US"),
-            "currency": (inst.currency if inst and inst.currency else portfolio.currency),
+            "original_currency": inst_ccy,
         })
 
-    # Calculate weights, pnl, daily_change
+    # ── FX conversion: convert all prices to portfolio display currency ──
+    display_ccy = (portfolio.currency or "USD").upper()
+    inst_currencies = [ep["original_currency"] for ep in enriched_positions]
+    fx_rates = md_service.get_fx_rates_bulk(inst_currencies, display_ccy)
+
+    total_value = 0.0
+    for ep in enriched_positions:
+        rate = fx_rates.get(ep["original_currency"].upper(), 1.0)
+        ep["fx_rate"] = round(rate, 6)
+        ep["currency"] = display_ccy
+        # Preserve original entry price before conversion
+        ep["original_entry_price"] = ep["entry_price"]
+        # Convert prices for display (DB unchanged)
+        ep["entry_price"] = round(ep["entry_price"] * rate, 4)
+        ep["current_price"] = round(ep["current_price"] * rate, 4)
+        total_value += ep["quantity"] * ep["current_price"]
+
+    # Calculate weights, pnl, daily_change (all in portfolio currency now)
     daily_pnl_total = 0.0
     for ep in enriched_positions:
+        rate = ep["fx_rate"]
         mkt_val = ep["quantity"] * ep["current_price"]
         ep["weight"] = round((mkt_val / total_value * 100) if total_value > 0 else 0, 2)
         ep["pnl"] = round((ep["current_price"] - ep["entry_price"]) * ep["quantity"], 2)
         ep["pnl_percent"] = round(((ep["current_price"] - ep["entry_price"]) / ep["entry_price"] * 100) if ep["entry_price"] > 0 else 0, 2)
 
-        prev_price = prev_prices.get(ep["instrument_symbol"]) or ep["current_price"]
-        if prev_price and prev_price > 0:
-            daily_chg = ((ep["current_price"] - prev_price) / prev_price) * 100
+        # Previous price also needs FX conversion
+        raw_prev = prev_prices.get(ep["instrument_symbol"])
+        prev_price_converted = (raw_prev * rate) if raw_prev else ep["current_price"]
+        if prev_price_converted and prev_price_converted > 0:
+            daily_chg = ((ep["current_price"] - prev_price_converted) / prev_price_converted) * 100
         else:
             daily_chg = 0.0
         ep["daily_change"] = round(daily_chg, 2)
-        daily_pnl_total += ep["quantity"] * (ep["current_price"] - prev_price)
+        daily_pnl_total += ep["quantity"] * (ep["current_price"] - prev_price_converted)
 
     # Enrich collaborators with username/email
     enriched_collabs = []
@@ -148,14 +167,14 @@ def read_portfolio(
             "email": user.email if user else "",
         })
 
-    # Build summary
+    # Build summary (all values in portfolio currency)
     total_cost = sum(ep["entry_price"] * ep["quantity"] for ep in enriched_positions)
     total_pnl = total_value - total_cost
     daily_pnl_pct = (daily_pnl_total / (total_value - daily_pnl_total) * 100) if (total_value - daily_pnl_total) > 0 else 0
     summary = {
         "name": portfolio.name,
         "description": portfolio.description or "",
-        "currency": portfolio.currency,
+        "currency": display_ccy,
         "benchmark": portfolio.benchmark_symbol or "SPY",
         "totalValue": round(total_value, 2),
         "dailyPnl": round(daily_pnl_total, 2),
@@ -303,6 +322,76 @@ def create_position(
     db.refresh(position)
     return position
 
+
+# ── Import positions Pydantic models ──
+class ImportPositionItem(PydanticBaseModel):
+    symbol: str
+    quantity: float
+    entry_price: float
+    entry_date: str  # YYYY-MM-DD
+    currency: Optional[str] = None  # if None, use yfinance detection
+    pricing_mode: str = "market"
+
+class ImportPositionsRequest(PydanticBaseModel):
+    positions: List[ImportPositionItem]
+
+
+@router.post("/{id}/import")
+def import_positions(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    body: ImportPositionsRequest,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Bulk import positions into a portfolio.
+    Each position is a {symbol, quantity, entry_price, entry_date, currency?, pricing_mode?}.
+    Instruments are synced via yfinance automatically.
+    """
+    portfolio = _get_portfolio_with_access(db, id, current_user, need_edit=True)
+    md_service = MarketDataService(db)
+
+    created = []
+    errors = []
+
+    for item in body.positions:
+        sym = item.symbol.strip().upper()
+        try:
+            instrument = md_service.sync_instrument(sym)
+            if not instrument:
+                instrument = models.instrument.Instrument(
+                    symbol=sym, name=sym, last_updated=None
+                )
+                db.add(instrument)
+                db.commit()
+
+            pos = Position(
+                portfolio_id=portfolio.id,
+                instrument_symbol=sym,
+                quantity=item.quantity,
+                entry_price=item.entry_price,
+                entry_date=item.entry_date,
+                pricing_mode=item.pricing_mode,
+                current_price=instrument.current_price if instrument else item.entry_price,
+            )
+            db.add(pos)
+            db.commit()
+            db.refresh(pos)
+            created.append({"symbol": sym, "id": pos.id})
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Import position failed for {sym}: {e}")
+            errors.append({"symbol": sym, "error": str(e)})
+
+    return {
+        "imported": len(created),
+        "errors": len(errors),
+        "created": created,
+        "failed": errors,
+    }
+
+
 @router.put("/{id}/positions/{pos_id}", response_model=schemas.portfolio.Position)
 def update_position(
     *,
@@ -340,6 +429,131 @@ def delete_position(
     db.delete(position)
     db.commit()
     return {"ok": True}
+
+
+# ========== DUPLICATE MANAGEMENT ==========
+
+@router.get("/{id}/positions/duplicates")
+def find_duplicates(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Find duplicate positions in a portfolio.
+    Duplicates = same instrument_symbol AND same entry_price (date ignored).
+    Returns groups of duplicate position IDs.
+    """
+    _get_portfolio_with_access(db, id, current_user)
+    positions = db.query(Position).filter(Position.portfolio_id == id).all()
+
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for p in positions:
+        key = (p.instrument_symbol, round(float(p.entry_price), 2))
+        groups[key].append({
+            "id": p.id,
+            "symbol": p.instrument_symbol,
+            "quantity": float(p.quantity),
+            "entry_price": float(p.entry_price),
+            "entry_date": str(p.entry_date) if p.entry_date else None,
+        })
+
+    # Only return groups with more than 1 position
+    duplicates = []
+    for (symbol, price), items in groups.items():
+        if len(items) > 1:
+            duplicates.append({
+                "symbol": symbol,
+                "entry_price": price,
+                "count": len(items),
+                "total_quantity": sum(i["quantity"] for i in items),
+                "positions": items,
+            })
+
+    return {"duplicates": duplicates, "total_duplicate_positions": sum(d["count"] - 1 for d in duplicates)}
+
+
+@router.post("/{id}/positions/merge-duplicates")
+def merge_duplicates(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Merge duplicate positions: combine quantities into the earliest position,
+    delete the rest. Duplicates = same symbol + same entry_price.
+    """
+    portfolio = _get_portfolio_with_access(db, id, current_user, need_edit=True)
+    positions = db.query(Position).filter(Position.portfolio_id == id).all()
+
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for p in positions:
+        key = (p.instrument_symbol, round(float(p.entry_price), 2))
+        groups[key].append(p)
+
+    merged_count = 0
+    deleted_count = 0
+    for (symbol, price), group in groups.items():
+        if len(group) <= 1:
+            continue
+        # Sort by id (keep the first/earliest created)
+        group.sort(key=lambda p: p.id)
+        keeper = group[0]
+        total_qty = sum(float(p.quantity) for p in group)
+        keeper.quantity = total_qty
+        for dup in group[1:]:
+            db.delete(dup)
+            deleted_count += 1
+        merged_count += 1
+
+    db.commit()
+    return {
+        "merged_groups": merged_count,
+        "deleted_positions": deleted_count,
+        "ok": True,
+    }
+
+
+@router.post("/{id}/positions/remove-duplicates")
+def remove_duplicates(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Remove duplicate positions: keep only one per (symbol, entry_price) group,
+    delete the extras WITHOUT merging quantities.
+    """
+    portfolio = _get_portfolio_with_access(db, id, current_user, need_edit=True)
+    positions = db.query(Position).filter(Position.portfolio_id == id).all()
+
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for p in positions:
+        key = (p.instrument_symbol, round(float(p.entry_price), 2))
+        groups[key].append(p)
+
+    deleted_count = 0
+    for (symbol, price), group in groups.items():
+        if len(group) <= 1:
+            continue
+        group.sort(key=lambda p: p.id)
+        # Keep the first, delete the rest
+        for dup in group[1:]:
+            db.delete(dup)
+            deleted_count += 1
+
+    db.commit()
+    return {
+        "deleted_positions": deleted_count,
+        "ok": True,
+    }
+
 
 # ========== TRANSACTIONS ==========
 

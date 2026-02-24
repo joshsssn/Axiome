@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from typing import List, Dict, Any, Optional
 
 from app.models.portfolio import Portfolio
+from app.models.instrument import PriceHistory
 from app.services.market_data import MarketDataService
 
 
@@ -37,17 +38,35 @@ class OptimizationService:
         except Exception as e:
             logger.error(f"Batch fetch failed: {e}")
 
+        # Single bulk DB query for ALL symbols instead of N individual queries
+        rows = (
+            self.db.query(
+                PriceHistory.instrument_symbol,
+                PriceHistory.date,
+                PriceHistory.adjusted_close,
+                PriceHistory.close,
+            )
+            .filter(
+                PriceHistory.instrument_symbol.in_(symbols),
+                PriceHistory.date >= start_date,
+                PriceHistory.date <= end_date,
+            )
+            .order_by(PriceHistory.date)
+            .all()
+        )
+
         price_data: Dict[str, pd.Series] = {}
-        for sym in symbols:
-            try:
-                # Still use get_price_history in case batch missed something or for DB retrieval
-                history = self.md_service.get_price_history(sym, start_date, end_date)
-                if history:
-                    dates = [h.date for h in history]
-                    prices = [h.adjusted_close or h.close for h in history]
-                    price_data[sym] = pd.Series(data=prices, index=pd.to_datetime(dates))
-            except Exception:
-                pass
+        # Group rows by symbol
+        from collections import defaultdict
+        by_sym: Dict[str, List] = defaultdict(list)
+        for sym, dt, adj_close, close in rows:
+            by_sym[sym].append((dt, adj_close or close))
+
+        for sym, data in by_sym.items():
+            dates = [d[0] for d in data]
+            prices = [d[1] for d in data]
+            price_data[sym] = pd.Series(data=prices, index=pd.to_datetime(dates))
+
         df = pd.DataFrame(price_data).ffill().dropna()
         return df
 
@@ -128,22 +147,12 @@ class OptimizationService:
             return {"error": str(e)}
 
     # -------------------------------------------------- efficient frontier
-    def get_efficient_frontier(
-        self, portfolio: Portfolio, points: int = 25
+    def _compute_frontier(
+        self, mu, S, points: int = 20, weight_bounds=(0, 1)
     ) -> List[Dict[str, float]]:
-        if not _PYPFOPT_AVAILABLE:
-            return []
-        symbols = list({p.instrument_symbol for p in portfolio.positions})
-        df = self._fetch_prices(symbols)
-        if df.empty or len(df.columns) < 2:
-            return []
-
-        mu = expected_returns.mean_historical_return(df)
-        S = risk_models.CovarianceShrinkage(df).ledoit_wolf()
-
+        """Compute efficient frontier from pre-computed mu and S."""
         try:
-            # Get min-vol return and max-return anchors
-            ef_min = EfficientFrontier(mu, S)
+            ef_min = EfficientFrontier(mu, S, weight_bounds=weight_bounds)
             ef_min.min_volatility()
             min_ret, min_vol, _ = ef_min.portfolio_performance(verbose=False)
 
@@ -153,7 +162,7 @@ class OptimizationService:
             frontier: List[Dict[str, float]] = []
             for tr in target_rets:
                 try:
-                    ef_pt = EfficientFrontier(mu, S)
+                    ef_pt = EfficientFrontier(mu, S, weight_bounds=weight_bounds)
                     ef_pt.efficient_return(tr)
                     perf = ef_pt.portfolio_performance(verbose=False)
                     frontier.append({
@@ -165,6 +174,20 @@ class OptimizationService:
             return frontier
         except Exception:
             return []
+
+    def get_efficient_frontier(
+        self, portfolio: Portfolio, points: int = 20
+    ) -> List[Dict[str, float]]:
+        if not _PYPFOPT_AVAILABLE:
+            return []
+        symbols = list({p.instrument_symbol for p in portfolio.positions})
+        df = self._fetch_prices(symbols)
+        if df.empty or len(df.columns) < 2:
+            return []
+
+        mu = expected_returns.mean_historical_return(df)
+        S = risk_models.CovarianceShrinkage(df).ledoit_wolf()
+        return self._compute_frontier(mu, S, points)
 
     # --------------------------------- full data for the Optimization page
     def get_full_optimization_data(self, portfolio: Portfolio, constraints: Optional[Dict] = None, risk_aversion: float = 1.0) -> Dict[str, Any]:
@@ -240,7 +263,9 @@ class OptimizationService:
             mean_var_point = current_point
 
         # ---------- Efficient frontier ----------
-        frontier = self.get_efficient_frontier(portfolio, points=25)
+        # Fewer points for large portfolios to keep response fast
+        n_points = 12 if len(symbols) > 20 else 20
+        frontier = self._compute_frontier(mu, S, n_points, weight_bounds)
 
         # ---------- Weights comparison table ----------
         weights_table = []

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, ReferenceDot
@@ -28,11 +28,19 @@ export function Optimization() {
   const [optData, setOptData] = useState<OptData | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Fetch optimization data from backend
   const runOptimization = useCallback(async () => {
     const numId = parseInt(activePortfolioId);
     if (isNaN(numId)) return;
+
+    // Cancel any in-flight request
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     try {
       const constraints = {
@@ -41,6 +49,8 @@ export function Optimization() {
         risk_aversion: riskAversion,
       };
       const data = await api.portfolios.getOptimizationData(numId, constraints);
+      // If this request was aborted, don't update state
+      if (controller.signal.aborted) return;
       if (data && !data.error) {
         setOptData({
           frontier: (data.efficientFrontier ?? []).map((p: any) => ({ volatility: p.risk, return: p.return })),
@@ -52,14 +62,24 @@ export function Optimization() {
             symbol: w.symbol, current: w.current, minVol: w.minVol, maxSharpe: w.maxSharpe, meanVar: w.meanVar ?? 0, diff: w.diff,
           })),
         });
+      } else if (data?.error) {
+        console.warn('Optimization returned error:', data.error);
       }
-    } catch (e) { console.error('Optimization failed', e); }
-    finally { setLoading(false); }
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') console.error('Optimization failed', e);
+    } finally {
+      if (!controller.signal.aborted) setLoading(false);
+    }
   }, [activePortfolioId, minWeight, maxWeight, riskAversion]);
 
-  // Auto-fetch on portfolio change if we have positions
+  // Auto-fetch on portfolio change (immediate), debounce parameter changes
   useEffect(() => {
-    if (pf && pf.positions.length >= 2) runOptimization();
+    if (!pf || pf.positions.length < 2) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      runOptimization();
+    }, 800); // 800ms debounce for parameter changes
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [activePortfolioId, minWeight, maxWeight, riskAversion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Save optimized weights as new portfolio
@@ -75,7 +95,7 @@ export function Optimization() {
         if (val > 0.01) weightsMap[w.symbol] = val;
       }
       const label = optType === 'maxSharpe' ? 'Max Sharpe' : optType === 'minVol' ? 'Min Vol' : `Mean-Var (γ=${riskAversion})`;
-      const name = `${pf?.name ?? 'Portfolio'} — ${label}`;
+      const name = `${pf?.summary?.name ?? 'Portfolio'} — ${label}`;
       await api.portfolios.saveOptimized(numId, name, weightsMap);
       setSaveMsg('Portfolio saved!');
       if (refreshPortfolios) refreshPortfolios();
@@ -85,6 +105,23 @@ export function Optimization() {
   }, [activePortfolioId, optData, optType, riskAversion, pf, refreshPortfolios]);
 
   if (!pf) return <div className="text-slate-400 p-8">Select a portfolio first.</div>;
+
+  // Full-page loading spinner for first optimization (no data yet)
+  if (loading && !optData) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Portfolio Optimization</h1>
+          <p className="text-slate-400 text-sm mt-1">Mean-variance optimization with Ledoit-Wolf shrinkage covariance estimation</p>
+        </div>
+        <div className="flex flex-col items-center justify-center py-24 gap-4">
+          <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
+          <p className="text-slate-300 text-lg font-medium">Computing optimization…</p>
+          <p className="text-slate-500 text-sm">This may take 15-45 seconds for large portfolios ({pf.positions.length} positions)</p>
+        </div>
+      </div>
+    );
+  }
 
   // Use backend data if available, else fall back to mock
   const frontier = optData?.frontier ?? pf.efficientFrontierData;

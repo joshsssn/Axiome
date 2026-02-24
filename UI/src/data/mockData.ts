@@ -31,8 +31,11 @@ export interface Position {
   sector: string;
   country: string;
   currency: string;
+  originalCurrency: string;
+  fxRate: number;
   quantity: number;
   entryPrice: number;
+  originalEntryPrice: number;
   currentPrice: number;
   entryDate: string;
   pricingMode: 'market' | 'fixed';
@@ -133,7 +136,7 @@ export interface PortfolioData {
 }
 
 // =========== POSITION TEMPLATES ===========
-const positionSets: Record<string, Position[]> = {
+const positionSets: Record<string, Omit<Position, 'originalCurrency' | 'originalEntryPrice' | 'fxRate'>[]> = {
   'global-multi-asset': [
     { id: 1, symbol: 'AAPL', name: 'Apple Inc.', assetClass: 'Equity', sector: 'Technology', country: 'US', currency: 'USD', quantity: 500, entryPrice: 142.50, currentPrice: 189.84, entryDate: '2023-03-15', pricingMode: 'market', weight: 8.2, pnl: 23670, pnlPercent: 33.22, dailyChange: 1.24 },
     { id: 2, symbol: 'MSFT', name: 'Microsoft Corp.', assetClass: 'Equity', sector: 'Technology', country: 'US', currency: 'USD', quantity: 350, entryPrice: 248.30, currentPrice: 378.91, entryDate: '2023-01-10', pricingMode: 'market', weight: 11.4, pnl: 45713.50, pnlPercent: 52.59, dailyChange: 0.87 },
@@ -291,7 +294,7 @@ export function generatePortfolioData(config: {
   const dailyPnl = Math.round(pValues[pValues.length - 1] - pValues[pValues.length - 2]);
   const dailyPnlPercent = ((pValues[pValues.length - 1] / pValues[pValues.length - 2]) - 1) * 100;
 
-  const positions = (positionSets[positionSet] || positionSets['global-multi-asset']).map(p => ({ ...p }));
+  const positions = (positionSets[positionSet] || positionSets['global-multi-asset']).map(p => ({ ...p, originalCurrency: p.currency, originalEntryPrice: p.entryPrice, fxRate: 1.0 }));
   const allocs = allocationSets[positionSet] || allocationSets['global-multi-asset'];
 
   const performanceData = dates.map((date, i) => ({
