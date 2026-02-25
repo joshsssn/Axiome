@@ -11,7 +11,7 @@ Axiome is a professional-grade standalone application for investors. Build, anal
 To use Axiome immediately without installing additional dependencies:
 
 1. Go to the **[Releases](https://github.com/joshsssn/Axiome-Exe/releases)** tab.
-2. Download the `Axiome-Setup-v2.0.0.exe` file (Windows).
+2. Download the `Axiome_2.0.0_x64-setup.exe` file (Windows).
 3. Install and launch the application.  
    *Note: Profiles and portfolios are stored locally on your computer.*
 
