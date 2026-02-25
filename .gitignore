@@ -16,12 +16,18 @@ __pycache__/
 *$py.class
 .venv/
 venv/
+venv310/
 ENV/
 .pytest_cache/
 .coverage
 htmlcov/
 .mypy_cache/
-API/data/*.db
+*.db
+
+# PyInstaller build artifacts
+API/build/
+API/dist/
+API/*.spec.bak
 
 # Node / Frontend
 node_modules/
@@ -33,6 +39,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+
+# Tauri / Rust
+UI/src-tauri/target/
+UI/src-tauri/binaries/
 
 # IDEs
 .vscode/

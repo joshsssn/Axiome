@@ -4,7 +4,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app import models, schemas
 from app.api import deps
 from app.services.market_data import MarketDataService, _KNOWN_META
 
@@ -17,7 +16,7 @@ def get_price(
     symbol: str,
     date: date,
     db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _: bool = Depends(deps.verify_session),
 ) -> Any:
     """
     Get historical price for a symbol on a specific date.
@@ -45,7 +44,7 @@ def get_price(
 def search_ticker(
     query: str,
     db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _: bool = Depends(deps.verify_session),
 ) -> Any:
     """
     Search for tickers matching the query string.
@@ -101,13 +100,13 @@ class ValidateTickersRequest(BaseModel):
 def validate_tickers(
     body: ValidateTickersRequest,
     db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _: bool = Depends(deps.verify_session),
 ) -> Any:
     """
     Validate a list of tickers against yfinance.
     When currency_hints are provided (parallel array), the backend will
     resolve tickers to the exchange listing that trades in that currency
-    (e.g. RACE + EUR → RACE.MI on Milan exchange).
+    (e.g. RACE + EUR -> RACE.MI on Milan exchange).
     Returns { valid: [{symbol, name, sector, country, currency, asset_class}], unresolved: [symbol ...] }
     """
     md_service = MarketDataService(db)
@@ -128,7 +127,7 @@ def validate_tickers(
         resolved_sym = sym
         if currency_hint and currency_hint != "USD":
             resolved_sym = md_service.resolve_symbol_for_currency(sym, currency_hint)
-            logger.info(f"validate_tickers: {sym} + hint={currency_hint} → {resolved_sym}")
+            logger.info(f"validate_tickers: {sym} + hint={currency_hint} -> {resolved_sym}")
 
         # Try known meta first (only for the original symbol)
         meta = _KNOWN_META.get(resolved_sym) or _KNOWN_META.get(sym)

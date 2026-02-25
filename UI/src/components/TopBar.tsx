@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { usePortfolio } from '@/context/PortfolioContext';
-import { ChevronDown, Plus, Briefcase, DollarSign, X, Trash2, Settings } from 'lucide-react';
+import { api } from '@/services/api';
+import { ChevronDown, Plus, Briefcase, DollarSign, X, Trash2, Settings, Download, Upload } from 'lucide-react';
 
 export function TopBar() {
-  const { portfolios, activePortfolio, activePortfolioId, setActivePortfolioId, createPortfolio, deletePortfolio, updatePortfolioMeta } = usePortfolio();
+  const { portfolios, activePortfolio, activePortfolioId, setActivePortfolioId, createPortfolio, deletePortfolio, updatePortfolioMeta, refreshPortfolios } = usePortfolio();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const jsonInputRef = useRef<HTMLInputElement>(null);
 
   // Create Form State
   const [formName, setFormName] = useState('');
@@ -63,6 +65,39 @@ export function TopBar() {
       benchmark: editBenchmark.trim().toUpperCase()
     });
     setEditModalOpen(false);
+  };
+
+  const handleExportJson = async () => {
+    if (!activePortfolio) return;
+    const numId = parseInt(activePortfolioId);
+    if (isNaN(numId)) return;
+    try {
+      const data = await api.portfolioJson.exportPortfolio(numId);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${activePortfolio.summary.name.replace(/[^a-zA-Z0-9]/g, '_')}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { console.error('Export failed', e); }
+    setDropdownOpen(false);
+  };
+
+  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const data = JSON.parse(reader.result as string);
+        await api.portfolioJson.importPortfolio(data);
+        refreshPortfolios();
+      } catch (err) { console.error('Import failed', err); alert('Import failed: ' + (err instanceof Error ? err.message : String(err))); }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+    setDropdownOpen(false);
   };
 
   const currencySymbol = activePortfolio ? (activePortfolio.summary.currency === 'EUR' ? '€' : '$') : '$';
@@ -132,13 +167,28 @@ export function TopBar() {
                       </div>
                     ))}
                   </div>
-                  <div className="p-2 border-t border-slate-700/50">
+                  <div className="p-2 border-t border-slate-700/50 space-y-0.5">
                     <button
                       onClick={() => { setDropdownOpen(false); setModalOpen(true); }}
                       className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-blue-400 hover:bg-blue-500/10 transition-colors font-medium"
                     >
                       <Plus className="w-4 h-4" /> Create New Portfolio
                     </button>
+                    {activePortfolio && (
+                      <button
+                        onClick={handleExportJson}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:bg-slate-700/50 hover:text-white transition-colors font-medium"
+                      >
+                        <Download className="w-4 h-4" /> Export as JSON
+                      </button>
+                    )}
+                    <button
+                      onClick={() => jsonInputRef.current?.click()}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:bg-slate-700/50 hover:text-white transition-colors font-medium"
+                    >
+                      <Upload className="w-4 h-4" /> Import from JSON
+                    </button>
+                    <input ref={jsonInputRef} type="file" accept=".json" className="hidden" onChange={handleImportJson} />
                   </div>
                 </div>
               )}

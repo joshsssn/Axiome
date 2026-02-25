@@ -1,14 +1,15 @@
 import {
   LayoutDashboard, Briefcase, TrendingUp, ShieldAlert,
-  Target, Zap, Users, ChevronLeft, ChevronRight, ListPlus,
-  ArrowLeftRight, Share2, UserCircle, LogOut, GitCompareArrows, History, Info
+  Target, Zap, ChevronLeft, ChevronRight, ListPlus,
+  ArrowLeftRight, UserCircle, GitCompareArrows, History, Info,
+  Users
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useAuth } from '@/context/AuthContext';
 import axiomeLogo from '@/img/axiome-logo.png';
 import axiomeFavicon from '@/img/logo.ico';
 
-export type Page = 'dashboard' | 'positions' | 'transactions' | 'sharing' | 'portfolio' | 'analytics' | 'risk' | 'optimization' | 'stress' | 'comparison' | 'backtest' | 'admin' | 'profile' | 'about';
+export type Page = 'dashboard' | 'positions' | 'transactions' | 'portfolio' | 'analytics' | 'risk' | 'optimization' | 'stress' | 'comparison' | 'backtest' | 'profile' | 'about';
 
 const navItems: { id: Page; label: string; icon: React.ElementType; section?: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'Overview' },
@@ -21,9 +22,7 @@ const navItems: { id: Page; label: string; icon: React.ElementType; section?: st
   { id: 'stress', label: 'Stress Test', icon: Zap, section: 'Tools' },
   { id: 'comparison', label: 'Comparison', icon: GitCompareArrows, section: 'Tools' },
   { id: 'backtest', label: 'Backtesting', icon: History, section: 'Tools' },
-  { id: 'sharing', label: 'Sharing', icon: Share2, section: 'Tools' },
   { id: 'profile', label: 'Profile', icon: UserCircle, section: 'System' },
-  { id: 'admin', label: 'Admin', icon: Users, section: 'System' },
   { id: 'about', label: 'About', icon: Info, section: 'System' },
 ];
 
@@ -36,11 +35,11 @@ interface SidebarProps {
 
 export function Sidebar({ currentPage, onNavigate, collapsed, onToggle }: SidebarProps) {
   const sections = [...new Set(navItems.map(i => i.section))];
-  const { user, logout } = useAuth();
+  const { currentUser, switchUser } = useAuth();
 
-  const initials = user?.displayName
-    ? user.displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
-    : user?.username.slice(0, 2).toUpperCase() || 'U';
+  const initials = currentUser?.displayName
+    ? currentUser.displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+    : 'U';
 
   return (
     <div className={cn(
@@ -64,8 +63,6 @@ export function Sidebar({ currentPage, onNavigate, collapsed, onToggle }: Sideba
         {sections.map(section => {
           const items = navItems.filter(i => {
             if (i.section !== section) return false;
-            // Hide admin page for non-admin users
-            if (i.id === 'admin' && user?.role !== 'admin') return false;
             return true;
           });
           return (
@@ -110,11 +107,11 @@ export function Sidebar({ currentPage, onNavigate, collapsed, onToggle }: Sideba
             collapsed && 'justify-center px-0',
             currentPage === 'profile' && 'bg-blue-600/10'
           )}
-          title={collapsed ? `${user?.displayName || user?.username}` : undefined}
+          title={collapsed ? `${currentUser?.displayName || 'User'}` : undefined}
         >
-          {user?.avatarUrl ? (
+          {currentUser?.avatarUrl ? (
             <img
-              src={user.avatarUrl}
+              src={currentUser.avatarUrl}
               alt=""
               className="w-8 h-8 rounded-lg object-cover shrink-0 border border-slate-700"
               onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
@@ -127,17 +124,24 @@ export function Sidebar({ currentPage, onNavigate, collapsed, onToggle }: Sideba
           {!collapsed && (
             <div className="flex-1 text-left overflow-hidden">
               <div className="text-xs font-semibold text-white truncate leading-tight">
-                {user?.displayName || user?.username || 'User'}
+                {currentUser?.displayName || 'User'}
               </div>
               <div className="text-[10px] text-slate-500 truncate leading-tight mt-0.5">
-                {user?.organization || user?.email || ''}
+                {currentUser?.organization || ''}
               </div>
             </div>
           )}
         </button>
 
-        {/* Collapse + Logout */}
+        {/* Collapse */}
         <div className="flex gap-1">
+          <button
+            onClick={switchUser}
+            className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 text-sm transition-all"
+            title="Switch user"
+          >
+            <Users className="w-4 h-4" />
+          </button>
           <button
             onClick={onToggle}
             className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 text-sm transition-all"
@@ -150,15 +154,6 @@ export function Sidebar({ currentPage, onNavigate, collapsed, onToggle }: Sideba
               </>
             )}
           </button>
-          {!collapsed && (
-            <button
-              onClick={logout}
-              className="px-3 py-2 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
-              title="Sign out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          )}
         </div>
       </div>
     </div>

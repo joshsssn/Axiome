@@ -152,7 +152,7 @@ export function Analytics() {
       <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-5">
         <h2 className="text-sm font-semibold text-white mb-4">Cumulative Return (%) — Portfolio vs Benchmark</h2>
         <ResponsiveContainer width="100%" height={350}>
-          <AreaChart data={chartData}>
+          <ComposedChart data={chartData}>
             <defs>
               <linearGradient id="gradPort" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
@@ -166,7 +166,7 @@ export function Analytics() {
               labelStyle={{ color: '#94a3b8' }} formatter={(v: number | undefined) => [`${(v ?? 0).toFixed(2)}%`]} />
             <Area type="monotone" dataKey="portfolioReturn" name="Portfolio" stroke="#3b82f6" strokeWidth={2} fill="url(#gradPort)" />
             <Line type="monotone" dataKey="benchmarkReturn" name="Benchmark" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="5 5" />
-          </AreaChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
 

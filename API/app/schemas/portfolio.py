@@ -57,7 +57,7 @@ class PositionEnriched(BaseModel):
 class TransactionBase(BaseModel):
     date: date
     type: str  # buy, sell, dividend, fee, deposit, withdrawal
-    symbol: str = "—"
+    symbol: str = "-"
     name: str = ""
     quantity: float = 0
     price: float = 0
@@ -75,28 +75,6 @@ class Transaction(TransactionBase):
     class Config:
         from_attributes = True
 
-# --- Collaborator Schemas ---
-class CollaboratorBase(BaseModel):
-    user_id: int
-    permission: str = "view"
-
-class CollaboratorCreate(CollaboratorBase):
-    pass
-
-class CollaboratorUpdate(BaseModel):
-    permission: str
-
-class Collaborator(BaseModel):
-    id: int
-    portfolio_id: int
-    user_id: int
-    permission: str
-    added_date: Optional[date] = None
-    username: str = ""
-    email: str = ""
-
-    class Config:
-        from_attributes = True
 
 # --- Portfolio Schemas ---
 class PortfolioBase(BaseModel):
@@ -116,19 +94,16 @@ class PortfolioUpdate(BaseModel):
 
 class Portfolio(PortfolioBase):
     id: int
-    owner_id: int
     positions: List[Position] = []
 
     class Config:
         from_attributes = True
 
 class PortfolioFull(PortfolioBase):
-    """Full portfolio with enriched positions, transactions, and collaborators."""
+    """Full portfolio with enriched positions, transactions."""
     id: int
-    owner_id: int
     positions: List[PositionEnriched] = []
     transactions: List[Transaction] = []
-    collaborators: List[Collaborator] = []
     summary: dict = {}
 
     class Config:

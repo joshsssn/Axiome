@@ -20,7 +20,7 @@ const sectorOptions = [
 const countryOptions = ['US', 'DE', 'NL', 'FR', 'GB', 'JP', 'CH', 'CA', 'AU', 'Other'];
 
 export function Positions() {
-  const { activePortfolio: pf, addPosition, removePosition, updatePosition, isLoading, currentUserId, refreshDetail } = usePortfolio();
+  const { activePortfolio: pf, addPosition, removePosition, updatePosition, isLoading, refreshDetail } = usePortfolio();
   const [showAddForm, setShowAddForm] = useState(false);
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -73,10 +73,8 @@ export function Positions() {
   if (isLoading) return <div className="p-10 text-center text-slate-400">Loading...</div>;
   if (!pf) return <div className="p-10 text-center text-slate-400">No portfolio selected</div>;
 
-  // Check if user can edit (owner or edit-permission collaborator)
-  const isOwner = pf.ownerId === currentUserId;
-  const userCollab = pf.collaborators.find(c => c.userId === currentUserId);
-  const canEdit = isOwner || userCollab?.permission === 'edit';
+  // Mono-user: always full access
+  const canEdit = true;
 
   const ccySymbols: Record<string, string> = { USD: '$', EUR: '€', GBP: '£', CHF: 'CHF', JPY: '¥', CAD: 'C$', SEK: 'kr', NOK: 'kr', DKK: 'kr', HKD: 'HK$', AUD: 'A$', SGD: 'S$' };
   const currSym = ccySymbols[pf.summary.currency] || pf.summary.currency;

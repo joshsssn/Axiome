@@ -1,23 +1,33 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
-from app.core import security
 from app.core.config import settings
 from app.models.user import User
 from app.models.portfolio import Portfolio, Position
+from app.models.instrument import Instrument
 
 from app.db.base import Base
 from app.db.session import engine
 from datetime import date, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def init_db(db: Session) -> None:
-    # Create tables if they don't exist (handles NEW tables like transactions, collaborators)
+    """Initialize the SQLite database: create tables, add missing columns, seed data."""
+    # Create all tables
     Base.metadata.create_all(bind=engine)
 
-    # Add missing columns to existing tables (create_all won't do this)
+    # Add missing columns to existing tables (SQLite compatible)
     _add_column_if_not_exists(db, "positions", "current_price", "FLOAT")
-    _add_column_if_not_exists(db, "users", "display_name", "VARCHAR")
-    _add_column_if_not_exists(db, "users", "organization", "VARCHAR")
-    _add_column_if_not_exists(db, "users", "avatar_url", "VARCHAR")
+    _add_column_if_not_exists(db, "portfolios", "owner_id", "INTEGER REFERENCES users(id)")
+
+    # Ensure at least one user exists
+    if db.query(User).count() == 0:
+        default_user = User(display_name="User", organization="", avatar_url="")
+        db.add(default_user)
+        db.commit()
+        logger.info("Created default user (id=1)")
 
     # Deduplicate price_history rows BEFORE creating unique constraint
     _deduplicate_price_history(db)
@@ -26,42 +36,20 @@ def init_db(db: Session) -> None:
     _create_index_if_not_exists(db, "ix_price_history_symbol_date", "price_history", "instrument_symbol, date")
     _create_unique_constraint_if_not_exists(db, "uq_price_history_symbol_date", "price_history", "instrument_symbol, date")
 
-    # Check by email OR username to avoid unique constraint violations
-    user = db.query(User).filter(
-        (User.email == "admin@portfolio.io") | (User.username == "admin")
-    ).first()
-    
-
-    if not user:
-        user_in = User(
-            email="admin@portfolio.io",
-            username="admin",
-            hashed_password=security.get_password_hash("admin"),
-            role="admin",
-            is_active=True,
-        )
-        db.add(user_in)
-        db.commit()
-        db.refresh(user_in)
-        print("Admin user created")
-
-        # Seed default portfolios for admin
-        _seed_default_portfolios(db, user_in.id)
+    # Seed default portfolios if none exist
+    existing = db.query(Portfolio).count()
+    if existing == 0:
+        first_user = db.query(User).first()
+        _seed_default_portfolios(db, owner_id=first_user.id if first_user else None)
+        logger.info("Seeded default portfolios")
     else:
-        print("Admin user already exists")
-        # Seed default portfolios if admin has none
-        existing = db.query(Portfolio).filter(Portfolio.owner_id == user.id).count()
-        if existing == 0:
-            _seed_default_portfolios(db, user.id)
+        logger.info(f"Database already has {existing} portfolios")
 
 
-def _seed_default_portfolios(db: Session, owner_id: int) -> None:
-    """Create 4 default portfolios with sample positions for the admin user."""
+def _seed_default_portfolios(db: Session, owner_id: int | None = None) -> None:
+    """Create 4 default portfolios with sample positions."""
     today = date.today()
     one_year_ago = today - timedelta(days=365)
-    
-    # Import Instrument model here to avoid circular imports if any
-    from app.models.instrument import Instrument
 
     portfolios_data = [
         {
@@ -129,7 +117,7 @@ def _seed_default_portfolios(db: Session, owner_id: int) -> None:
                     asset_class="stock",
                 )
                 db.add(instrument)
-        
+
         # Flush instruments before creating portfolio/positions
         db.flush()
 
@@ -142,7 +130,7 @@ def _seed_default_portfolios(db: Session, owner_id: int) -> None:
             owner_id=owner_id,
         )
         db.add(portfolio)
-        db.flush() # Get portfolio.id
+        db.flush()  # Get portfolio.id
 
         # 3. Create positions
         for sym, qty, price in pf_data["positions"]:
@@ -155,11 +143,11 @@ def _seed_default_portfolios(db: Session, owner_id: int) -> None:
                 pricing_mode="market",
             )
             db.add(pos)
-        
+
         db.flush()
 
     db.commit()
-    print(f"Seeded {len(portfolios_data)} default portfolios for admin")
+    logger.info(f"Seeded {len(portfolios_data)} default portfolios")
 
 
 def _add_column_if_not_exists(db: Session, table: str, column: str, col_type: str) -> None:
@@ -170,10 +158,10 @@ def _add_column_if_not_exists(db: Session, table: str, column: str, col_type: st
         if column not in columns:
             db.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}'))
             db.commit()
-            print(f"Added column {column} to {table}")
+            logger.info(f"Added column {column} to {table}")
     except Exception as e:
         db.rollback()
-        print(f"Column migration skipped ({table}.{column}): {e}")
+        logger.debug(f"Column migration skipped ({table}.{column}): {e}")
 
 
 def _deduplicate_price_history(db: Session) -> None:
@@ -187,11 +175,11 @@ def _deduplicate_price_history(db: Session) -> None:
         ))
         db.commit()
         removed = result.rowcount
-        if removed > 0:
-            print(f"Deduplicated price_history: removed {removed} duplicate rows")
+        if removed and removed > 0:
+            logger.info(f"Deduplicated price_history: removed {removed} duplicate rows")
     except Exception as e:
         db.rollback()
-        print(f"Deduplication skipped: {e}")
+        logger.debug(f"Deduplication skipped: {e}")
 
 
 def _create_index_if_not_exists(db: Session, index_name: str, table: str, columns: str) -> None:
@@ -201,7 +189,7 @@ def _create_index_if_not_exists(db: Session, index_name: str, table: str, column
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"Index migration skipped ({index_name}): {e}")
+        logger.debug(f"Index migration skipped ({index_name}): {e}")
 
 
 def _create_unique_constraint_if_not_exists(db: Session, constraint_name: str, table: str, columns: str) -> None:
@@ -211,4 +199,4 @@ def _create_unique_constraint_if_not_exists(db: Session, constraint_name: str, t
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"Unique constraint migration skipped ({constraint_name}): {e}")
+        logger.debug(f"Unique constraint migration skipped ({constraint_name}): {e}")

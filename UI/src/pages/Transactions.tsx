@@ -13,7 +13,7 @@ const typeConfig: Record<string, { label: string; color: string; bg: string; ico
 };
 
 export function Transactions() {
-  const { activePortfolio, addTransaction, removeTransaction, currentUserId } = usePortfolio();
+  const { activePortfolio, addTransaction, removeTransaction } = usePortfolio();
 
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
@@ -94,10 +94,8 @@ export function Transactions() {
   const pf = activePortfolio;
   const { transactions, summary } = pf;
 
-  // Permission check
-  const isOwner = pf.ownerId === currentUserId;
-  const userCollab = pf.collaborators.find(c => c.userId === currentUserId);
-  const canEdit = isOwner || userCollab?.permission === 'edit';
+  // Mono-user: always full access
+  const canEdit = true;
 
   const filtered = transactions.filter(tx => {
     const matchesSearch = search === '' ||

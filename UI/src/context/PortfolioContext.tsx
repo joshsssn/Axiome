@@ -5,12 +5,10 @@ import {
   type PortfolioData,
   type Position,
   type Transaction,
-  type Collaborator,
   type StressScenario,
   type RiskMetricsData,
 } from '@/data/mockData';
 import { api } from '../services/api';
-import { useAuth } from './AuthContext';
 
 /* ────────────────────────────────────────────────── Types */
 interface PortfolioContextType {
@@ -26,13 +24,9 @@ interface PortfolioContextType {
   updatePortfolioMeta: (updates: { name?: string; description?: string; benchmark?: string }) => void;
   addTransaction: (tx: Omit<Transaction, 'id'>) => void;
   removeTransaction: (txId: number) => void;
-  addCollaborator: (collab: Omit<Collaborator, 'id'>) => void;
-  removeCollaborator: (collabId: number) => void;
-  updateCollaboratorPermission: (collabId: number, permission: 'view' | 'edit') => void;
   duplicatePortfolio: (id: string) => void;
   addStressScenario: (scenario: Omit<StressScenario, 'id'>) => void;
   removeStressScenario: (id: number) => void;
-  currentUserId: number;
   isLoading: boolean;
   refreshPortfolios: () => void;
   refreshDetail: () => void;
@@ -76,11 +70,11 @@ function generateStressContributions(positions: Position[]): Array<{ symbol: str
   }));
 }
 
-function emptyPortfolio(id: string, ownerId: number, name: string, description: string, currency: string, benchmark: string): PortfolioData {
+function emptyPortfolio(id: string, name: string, description: string, currency: string, benchmark: string): PortfolioData {
   return {
-    id, ownerId,
+    id,
     summary: { name, description, currency: currency as 'USD' | 'EUR', benchmark, totalValue: 0, dailyPnl: 0, dailyPnlPercent: 0, totalPnl: 0, totalPnlPercent: 0, positionCount: 0, cashBalance: 0, inceptionDate: new Date().toISOString().split('T')[0] },
-    positions: [], transactions: [], collaborators: [],
+    positions: [], transactions: [],
     performanceData: [], monthlyReturns: [], returnDistribution: [],
     allocationByClass: [], allocationBySector: [], allocationByCountry: [],
     riskMetrics: { ...EMPTY_RISK },
@@ -135,18 +129,6 @@ function mapTransaction(t: any): Transaction {
   };
 }
 
-function mapCollaborator(c: any): Collaborator {
-  return {
-    id: c.id,
-    userId: c.user_id,
-    username: c.username ?? `user_${c.user_id}`,
-    email: c.email ?? '',
-    permission: c.permission ?? 'view',
-    addedDate: c.added_date ?? '',
-    avatar: (c.username ?? 'U').slice(0, 2).toUpperCase(),
-  };
-}
-
 /* ────────────────────── Provider */
 export function PortfolioProvider({ children }: { children: ReactNode }) {
   const [portfolios, setPortfolios] = useState<PortfolioData[]>([]);
@@ -154,30 +136,25 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
-  const { user: authUser } = useAuth();
-  const currentUserId = authUser?.id ?? 1;
   const isBackend = useRef(false);
   const initialLoadDone = useRef(false);
 
   /** Full refresh (list + detail) — only for create/delete/duplicate portfolio */
   const refresh = useCallback(() => setRefreshKey(k => k + 1), []);
-  /** Detail-only refresh — for add/remove position, transaction, collaborator, etc. */
+  /** Detail-only refresh — for add/remove position, transaction, etc. */
   const refreshDetail = useCallback(() => setDetailRefreshKey(k => k + 1), []);
 
-  /* ─── Fetch portfolio list ─── */
+  /* ─── Fetch portfolio list (with retry for sidecar startup) ─── */
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const MAX_RETRIES = 6;
+    const BASE_DELAY = 600; // ms
+
+    async function loadPortfolios(attempt: number) {
       try {
         // Only show loading spinner on initial load, not on refresh
         if (!initialLoadDone.current) setIsLoading(true);
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-          isBackend.current = false;
-          setPortfolios(defaultPortfolios);
-          setActivePortfolioId(defaultPortfolios[0]?.id ?? '');
-          return;
-        }
+        // Always try the backend API (no token check needed — auth removed)
         isBackend.current = true;
         const pfs: any[] = await api.portfolios.list();
         if (cancelled) return;
@@ -189,7 +166,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
             if (existing) {
               return { ...existing, summary: { ...existing.summary, name: p.name, description: p.description ?? existing.summary.description } };
             }
-            return emptyPortfolio(String(p.id), p.owner_id, p.name, p.description ?? '', p.currency ?? 'USD', p.benchmark_symbol ?? 'SPY');
+            return emptyPortfolio(String(p.id), p.name, p.description ?? '', p.currency ?? 'USD', p.benchmark_symbol ?? 'SPY');
           });
           return mapped;
         });
@@ -199,18 +176,30 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         if (pfIds.length > 0 && (!activePortfolioId || !pfIds.includes(activePortfolioId))) {
           setActivePortfolioId(pfIds[0]);
         }
-      } catch (err) {
-        console.error('Fetch portfolios failed', err);
-        isBackend.current = false;
-        setPortfolios(defaultPortfolios);
-        setActivePortfolioId(defaultPortfolios[0]?.id ?? '');
-      } finally {
+
         if (!cancelled) {
           setIsLoading(false);
           initialLoadDone.current = true;
         }
+      } catch (err) {
+        console.warn(`Fetch portfolios failed (attempt ${attempt + 1}/${MAX_RETRIES})`, err);
+        if (!cancelled && attempt < MAX_RETRIES - 1 && !initialLoadDone.current) {
+          // Retry — sidecar may still be starting
+          const delay = BASE_DELAY * Math.pow(1.5, attempt);
+          setTimeout(() => loadPortfolios(attempt + 1), delay);
+        } else if (!cancelled) {
+          // All retries exhausted — fall back to mock data
+          console.error('All retries exhausted, falling back to mock data');
+          isBackend.current = false;
+          setPortfolios(defaultPortfolios);
+          setActivePortfolioId(defaultPortfolios[0]?.id ?? '');
+          setIsLoading(false);
+          initialLoadDone.current = true;
+        }
       }
-    })();
+    }
+
+    loadPortfolios(0);
     return () => { cancelled = true; };
   }, [refreshKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -232,7 +221,6 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         // Map positions
         const positions: Position[] = (details.positions ?? []).map(mapPosition);
         const transactions: Transaction[] = (details.transactions ?? []).map(mapTransaction);
-        const collaborators: Collaborator[] = (details.collaborators ?? []).map(mapCollaborator);
 
         // Summary from backend or compute
         const summary = details.summary ?? {};
@@ -253,7 +241,6 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
           if (pf.id !== activePortfolioId) return pf;
           return {
             ...pf,
-            ownerId: details.owner_id ?? pf.ownerId,
             summary: {
               name: details.name ?? pf.summary.name,
               description: details.description ?? pf.summary.description,
@@ -270,7 +257,6 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
             },
             positions,
             transactions,
-            collaborators,
             riskMetrics: risk,
             performanceData: a.performanceData ?? [],
             monthlyReturns: a.monthlyReturns ?? [],
@@ -313,17 +299,17 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     if (!isBackend.current) {
       // mock-mode
       const id = `pf-${Date.now()}`;
-      setPortfolios(prev => [...prev, emptyPortfolio(id, currentUserId, cfg.name, cfg.description, cfg.currency, cfg.benchmark)]);
+      setPortfolios(prev => [...prev, emptyPortfolio(id, cfg.name, cfg.description, cfg.currency, cfg.benchmark)]);
       setActivePortfolioId(id);
       return;
     }
     try {
       const r = await api.portfolios.create({ name: cfg.name, description: cfg.description, currency: cfg.currency, benchmark_symbol: cfg.benchmark });
       const id = String(r.id);
-      setPortfolios(prev => [...prev, emptyPortfolio(id, r.owner_id, r.name, r.description ?? '', r.currency ?? cfg.currency, r.benchmark_symbol ?? cfg.benchmark)]);
+      setPortfolios(prev => [...prev, emptyPortfolio(id, r.name, r.description ?? '', r.currency ?? cfg.currency, r.benchmark_symbol ?? cfg.benchmark)]);
       setActivePortfolioId(id);
     } catch (e) { console.error('Create portfolio failed', e); }
-  }, [currentUserId]);
+  }, []);
 
   const deletePortfolio = useCallback(async (id: string) => {
     if (!isBackend.current) {
@@ -440,45 +426,6 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     } catch (e) { console.error('Remove transaction failed', e); }
   }, [activePortfolioId, refreshDetail]);
 
-  const addCollaborator = useCallback(async (collab: Omit<Collaborator, 'id'>) => {
-    if (!activePortfolioId) return;
-    if (!isBackend.current) {
-      setPortfolios(prev => prev.map(pf => pf.id !== activePortfolioId ? pf : { ...pf, collaborators: [...pf.collaborators, { ...collab, id: Date.now() }] }));
-      return;
-    }
-    try {
-      await api.portfolios.addCollaborator(parseInt(activePortfolioId), {
-        user_id: collab.userId,
-        permission: collab.permission,
-      });
-      refreshDetail();
-    } catch (e) { console.error('Add collaborator failed', e); }
-  }, [activePortfolioId, refreshDetail]);
-
-  const removeCollaborator = useCallback(async (collabId: number) => {
-    if (!activePortfolioId) return;
-    if (!isBackend.current) {
-      setPortfolios(prev => prev.map(pf => pf.id !== activePortfolioId ? pf : { ...pf, collaborators: pf.collaborators.filter(c => c.id !== collabId) }));
-      return;
-    }
-    try {
-      await api.portfolios.deleteCollaborator(parseInt(activePortfolioId), collabId);
-      refreshDetail();
-    } catch (e) { console.error('Remove collaborator failed', e); }
-  }, [activePortfolioId, refreshDetail]);
-
-  const updateCollaboratorPermission = useCallback(async (collabId: number, permission: 'view' | 'edit') => {
-    if (!activePortfolioId) return;
-    if (!isBackend.current) {
-      setPortfolios(prev => prev.map(pf => pf.id !== activePortfolioId ? pf : { ...pf, collaborators: pf.collaborators.map(c => c.id === collabId ? { ...c, permission } : c) }));
-      return;
-    }
-    try {
-      await api.portfolios.updateCollaborator(parseInt(activePortfolioId), collabId, { permission });
-      refreshDetail();
-    } catch (e) { console.error('Update collaborator failed', e); }
-  }, [activePortfolioId, refreshDetail]);
-
   const duplicatePortfolio = useCallback(async (id: string) => {
     if (!isBackend.current) {
       const src = portfolios.find(p => p.id === id);
@@ -525,13 +472,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       updatePortfolioMeta,
       addTransaction,
       removeTransaction,
-      addCollaborator,
-      removeCollaborator,
-      updateCollaboratorPermission,
       duplicatePortfolio,
       addStressScenario,
       removeStressScenario,
-      currentUserId,
       isLoading,
       refreshPortfolios: refresh,
       refreshDetail,

@@ -51,7 +51,7 @@ class BacktestingService:
     ) -> Dict[str, Any]:
         """Run a full historical back-test and return all result data."""
 
-        # 1) Derive target weights ─────────────────────────────────────
+        # 1) Derive target weights -------------------------------------
         if custom_weights:
             weights = custom_weights
         else:
@@ -63,7 +63,7 @@ class BacktestingService:
         symbols = list(weights.keys())
         all_symbols = list(set(symbols + [benchmark_symbol]))
 
-        # 2) Fetch price data ──────────────────────────────────────────
+        # 2) Fetch price data ------------------------------------------
         price_data: Dict[str, pd.Series] = {}
         for sym in all_symbols:
             try:
@@ -96,7 +96,7 @@ class BacktestingService:
         returns = df.pct_change().dropna()
         bench_in = benchmark_symbol in returns.columns
 
-        # 3) Simulate ──────────────────────────────────────────────────
+        # 3) Simulate --------------------------------------------------
         rebal_rule = REBALANCE_MAP.get(rebalance_freq)
         sim = self._simulate(returns, w, initial_capital, rebal_rule)
 
@@ -112,7 +112,7 @@ class BacktestingService:
 
         bench_values = initial_capital * (1 + bench_returns).cumprod()
 
-        # 4) Build result payload ──────────────────────────────────────
+        # 4) Build result payload --------------------------------------
         result: Dict[str, Any] = {}
 
         # -- equity curve
@@ -149,7 +149,7 @@ class BacktestingService:
             })
         result["drawdownData"] = dd_list
 
-        # -- monthly returns heatmap (year × month)
+        # -- monthly returns heatmap (year x month)
         monthly = pf_returns.resample("ME").apply(lambda x: (1 + x).prod() - 1)
         heatmap_rows = []
         for dt, val in monthly.items():

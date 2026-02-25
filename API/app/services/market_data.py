@@ -1,13 +1,13 @@
 """
-Market data service — optimised for speed.
+Market data service - optimised for speed.
 
 Key improvements over the original:
-  • batch_sync_instruments() / batch_download_history() use a single
+  - batch_sync_instruments() / batch_download_history() use a single
     yf.download() call for N symbols instead of N sequential calls.
-  • get_latest_prices_bulk() is a single DB query — no yfinance at all.
-  • get_price_at() is DB-only (no yfinance call in the hot path).
-  • Concurrency-safe dedup via INSERT … ON CONFLICT DO NOTHING.
-  • In-process LRU + TTL cache for instrument metadata.
+  - get_latest_prices_bulk() is a single DB query - no yfinance at all.
+  - get_price_at() is DB-only (no yfinance call in the hot path).
+  - Concurrency-safe dedup via INSERT ... ON CONFLICT DO NOTHING.
+  - In-process LRU + TTL cache for instrument metadata.
 """
 
 import yfinance as yf
@@ -22,7 +22,7 @@ from app.models.instrument import Instrument, PriceHistory
 
 logger = logging.getLogger(__name__)
 
-# ────────────── in-process rate-limiter / cache ──────────────
+# -------------- in-process rate-limiter / cache --------------
 _last_yf_call: float = 0.0
 _YF_MIN_INTERVAL = 0.35          # seconds between yfinance API calls
 _price_cache: Dict[str, Any] = {}
@@ -53,7 +53,7 @@ def _cache_set(key: str, value: Any):
             del _price_cache[k]
 
 
-# ────────────── yfinance value normalization ──────────────
+# -------------- yfinance value normalization --------------
 _QUOTE_TYPE_MAP: Dict[str, str] = {
     "EQUITY": "Equity",
     "STOCK": "Equity",
@@ -98,7 +98,7 @@ def _normalize_sector(raw: str | None) -> str | None:
     return _SECTOR_MAP.get(raw.lower().strip(), raw.title())
 
 
-# ────────────── known metadata fallback ──────────────
+# -------------- known metadata fallback --------------
 _KNOWN_META: Dict[str, Dict[str, str]] = {
     "AAPL": {"name": "Apple Inc.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
     "MSFT": {"name": "Microsoft Corp.", "sector": "Technology", "country": "US", "currency": "USD", "asset_class": "Equity"},
@@ -171,18 +171,18 @@ _KNOWN_META: Dict[str, Dict[str, str]] = {
 }
 
 
-# ────────────── Yahoo Finance exchange → currency mapping ──────────────
+# -------------- Yahoo Finance exchange -> currency mapping --------------
 _EXCHANGE_CURRENCY: Dict[str, str] = {
     # US
     "NYQ": "USD", "NMS": "USD", "NGM": "USD", "NCM": "USD", "PCX": "USD",
     "BTS": "USD", "ASE": "USD", "OQX": "USD", "PNK": "USD", "OPR": "USD",
     "NAS": "USD", "CCC": "USD",
-    # Europe – EUR
+    # Europe - EUR
     "MIL": "EUR", "PAR": "EUR", "GER": "EUR", "FRA": "EUR", "MUN": "EUR",
     "AMS": "EUR", "MCE": "EUR", "VIE": "EUR", "BER": "EUR", "DUS": "EUR",
     "HAM": "EUR", "STU": "EUR", "HEL": "EUR", "LIS": "EUR", "ATH": "EUR",
     "IOB": "EUR", "DXE": "EUR", "CXE": "EUR",
-    # Europe – other
+    # Europe - other
     "EBS": "CHF", "ZRH": "CHF",                        # Swiss
     "LSE": "GBp", "LON": "GBp",                        # London (pence)
     "CPH": "DKK",                                       # Copenhagen
@@ -204,7 +204,7 @@ _EXCHANGE_CURRENCY: Dict[str, str] = {
     "ASX": "AUD", "CXA": "AUD",
 }
 
-# currency → Yahoo Finance suffixes to try (most common exchanges first)
+# currency -> Yahoo Finance suffixes to try (most common exchanges first)
 _CURRENCY_SUFFIXES: Dict[str, List[str]] = {
     "EUR": [".PA", ".DE", ".MI", ".AS", ".MC", ".BR", ".VI", ".HE", ".LS"],
     "CHF": [".SW"],
@@ -231,14 +231,14 @@ def _exchange_to_currency(exchange_code: str) -> Optional[str]:
     return ccy
 
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 #  MarketDataService
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 class MarketDataService:
     def __init__(self, db: Session):
         self.db = db
 
-    # ──────────────── RESOLVE SYMBOL FOR CURRENCY ────────────────
+    # ---------------- RESOLVE SYMBOL FOR CURRENCY ----------------
 
     def resolve_symbol_for_currency(
         self, raw_symbol: str, currency_hint: str
@@ -250,7 +250,7 @@ class MarketDataService:
 
         Strategy:
           1. Check if the bare symbol already trades in the target currency.
-          2. Use yf.Search() to find all listings → pick by exchange→currency.
+          2. Use yf.Search() to find all listings -> pick by exchange->currency.
           3. Try common exchange suffixes for that currency.
           4. Fall back to the original symbol if nothing matches.
         """
@@ -286,7 +286,7 @@ class MarketDataService:
                 exch_ccy = _exchange_to_currency(c_exch)
                 if exch_ccy and exch_ccy == hint:
                     logger.info(
-                        f"resolve_symbol: {raw_symbol}+{currency_hint} → "
+                        f"resolve_symbol: {raw_symbol}+{currency_hint} -> "
                         f"{c_sym} (via search, exchange={c_exch})"
                     )
                     _cache_set(cache_key, c_sym)
@@ -306,7 +306,7 @@ class MarketDataService:
                     name = info.get("longName") or info.get("shortName")
                     if name:
                         logger.info(
-                            f"resolve_symbol: {raw_symbol}+{currency_hint} → "
+                            f"resolve_symbol: {raw_symbol}+{currency_hint} -> "
                             f"{candidate} (via suffix probe)"
                         )
                         _cache_set(cache_key, candidate)
@@ -322,7 +322,7 @@ class MarketDataService:
         _cache_set(cache_key, sym)
         return sym
 
-    # ──────────────────── INSTRUMENT METADATA ────────────────────
+    # -------------------- INSTRUMENT METADATA --------------------
 
     def get_instrument_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch instrument metadata from yfinance with caching."""
@@ -355,11 +355,11 @@ class MarketDataService:
                 break
         return None
 
-    # ── fast DB-only helper: ensure instrument rows exist ──
+    # -- fast DB-only helper: ensure instrument rows exist --
     def ensure_instruments_exist(self, symbols: List[str]) -> Dict[str, Instrument]:
         """
         Make sure every symbol has an Instrument row in the DB.
-        Uses _KNOWN_META as fallback — **no yfinance call**.
+        Uses _KNOWN_META as fallback - **no yfinance call**.
         Also updates instruments that have placeholder metadata (name == symbol).
         Returns {symbol: Instrument}.
         """
@@ -416,7 +416,7 @@ class MarketDataService:
 
         has_real_name = instrument and instrument.name and instrument.name != instrument.symbol
         if instrument and instrument.last_updated == date.today() and has_real_name:
-            return instrument  # already fresh — instant
+            return instrument  # already fresh - instant
 
         info = self.get_instrument_info(symbol)
         if not info:
@@ -465,8 +465,8 @@ class MarketDataService:
     def batch_sync_instruments(self, symbols: List[str]) -> Dict[str, Instrument]:
         """
         Sync multiple instruments in one shot.
-        • Instruments already updated today are skipped.
-        • Remaining instruments get metadata from _KNOWN_META (instant)
+        - Instruments already updated today are skipped.
+        - Remaining instruments get metadata from _KNOWN_META (instant)
           and current_price from a single yf.download() call.
         """
         if not symbols:
@@ -488,7 +488,8 @@ class MarketDataService:
             df = yf.download(stale, period="5d", progress=False, threads=True)
             if df is not None and not df.empty:
                 if len(stale) == 1:
-                    last_close = float(df["Close"].dropna().iloc[-1]) if "Close" in df.columns else None
+                    _close = df["Close"].dropna()
+                    last_close = float(_close.iloc[-1].item()) if "Close" in df.columns and len(_close) else None
                     if last_close and last_close > 0:
                         inst_map[stale[0]].current_price = last_close
                 else:
@@ -516,7 +517,7 @@ class MarketDataService:
 
         return inst_map
 
-    # ──────────────────── FX RATES ────────────────────
+    # -------------------- FX RATES --------------------
 
     def get_fx_rate(self, from_ccy: str, to_ccy: str) -> float:
         """
@@ -565,7 +566,7 @@ class MarketDataService:
         except Exception:
             pass
 
-        logger.warning(f"FX rate {from_ccy}→{to_ccy} unavailable, using 1.0")
+        logger.warning(f"FX rate {from_ccy}->{to_ccy} unavailable, using 1.0")
         return 1.0
 
     def get_fx_rates_bulk(self, currencies: list, target_ccy: str) -> dict:
@@ -583,11 +584,11 @@ class MarketDataService:
                 rates[ccy] = self.get_fx_rate(ccy, target_ccy)
         return rates
 
-    # ──────────────────── PRICE LOOKUPS (DB-only, instant) ────────────────────
+    # -------------------- PRICE LOOKUPS (DB-only, instant) --------------------
 
     def get_latest_prices_bulk(self, symbols: List[str]) -> Dict[str, float]:
         """
-        Single DB query → {symbol: latest_close_price}.
+        Single DB query -> {symbol: latest_close_price}.
         No yfinance calls. Used for fast portfolio enrichment.
         """
         if not symbols:
@@ -621,7 +622,7 @@ class MarketDataService:
 
     def get_prices_at_date_bulk(self, symbols: List[str], target_date: date) -> Dict[str, float]:
         """
-        Single DB query → closest price on or before target_date for each symbol.
+        Single DB query -> closest price on or before target_date for each symbol.
         Falls back up to 7 days for weekends/holidays. No yfinance.
         """
         if not symbols:
@@ -675,7 +676,7 @@ class MarketDataService:
             return rec.adjusted_close or rec.close
         return None
 
-    # ──────────────────── PRICE HISTORY ────────────────────
+    # -------------------- PRICE HISTORY --------------------
 
     def get_price_history(self, symbol: str, start_date: date, end_date: date = date.today()) -> List[PriceHistory]:
         """Get historical data, fetching from yfinance if DB has gaps."""
@@ -797,7 +798,7 @@ class MarketDataService:
         except Exception as e:
             logger.error(f"batch_download_history failed: {e}")
 
-    # ──────────────────── BACKGROUND REFRESH ────────────────────
+    # -------------------- BACKGROUND REFRESH --------------------
 
     def refresh_all_prices(self) -> int:
         """
@@ -820,7 +821,7 @@ class MarketDataService:
 
         return len(symbols)
 
-    # ──────────────────── INTERNAL HELPERS ────────────────────
+    # -------------------- INTERNAL HELPERS --------------------
 
     def _yf_download_single(self, symbol: str, start: date, end: date):
         """Download price history for a single symbol with retry."""

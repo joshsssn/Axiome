@@ -3,27 +3,19 @@ from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.orm import Session
 from datetime import date
 
-from app import models
 from app.api import deps
-from app.models.portfolio import Portfolio, Position, Collaborator
+from app.models.portfolio import Portfolio, Position
 from app.models.instrument import Instrument
 from app.services.optimization import OptimizationService
 
 router = APIRouter()
 
 
-def _check_portfolio_access(db: Session, id: int, current_user: models.User) -> Portfolio:
-    """Get portfolio and verify user has access (owner or collaborator)."""
+def _check_portfolio_access(db: Session, id: int) -> Portfolio:
+    """Get portfolio by id."""
     portfolio = db.query(Portfolio).filter(Portfolio.id == id).first()
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    if portfolio.owner_id != current_user.id:
-        collab = db.query(Collaborator).filter(
-            Collaborator.portfolio_id == id,
-            Collaborator.user_id == current_user.id,
-        ).first()
-        if not collab:
-            raise HTTPException(status_code=403, detail="Access denied")
     return portfolio
 
 
@@ -36,10 +28,10 @@ def optimize_portfolio(
     min_weight: Optional[float] = Body(None),
     max_weight: Optional[float] = Body(None),
     risk_aversion: Optional[float] = Body(None),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _: bool = Depends(deps.verify_session),
 ) -> Any:
     """Optimize portfolio weights with optional weight constraints."""
-    portfolio = _check_portfolio_access(db, id, current_user)
+    portfolio = _check_portfolio_access(db, id)
     opt_service = OptimizationService(db)
     constraints = {}
     if min_weight is not None:
@@ -58,10 +50,10 @@ def get_efficient_frontier(
     min_weight: Optional[float] = Query(None),
     max_weight: Optional[float] = Query(None),
     risk_aversion: Optional[float] = Query(None),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _: bool = Depends(deps.verify_session),
 ) -> Any:
     """Get efficient frontier data and optimization results with optional weight constraints."""
-    portfolio = _check_portfolio_access(db, id, current_user)
+    portfolio = _check_portfolio_access(db, id)
     opt_service = OptimizationService(db)
     constraints = {}
     if min_weight is not None:
@@ -80,14 +72,14 @@ def save_optimized_portfolio(
     id: int,
     name: str = Body(...),
     weights: Dict[str, float] = Body(...),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _: bool = Depends(deps.verify_session),
 ) -> Any:
     """
     Save optimized weights as a new portfolio.
     `weights` is a dict of {symbol: weight_percent} e.g. {"AAPL": 35.0, "MSFT": 25.0, ...}
     The total portfolio value from the source portfolio is re-allocated according to the new weights.
     """
-    source = _check_portfolio_access(db, id, current_user)
+    source = _check_portfolio_access(db, id)
 
     # Calculate total portfolio value from source positions
     total_value = 0.0
@@ -106,7 +98,6 @@ def save_optimized_portfolio(
         name=name or f"Optimized - {source.name}",
         description=f"Optimized version of '{source.name}'",
         currency=source.currency,
-        owner_id=current_user.id,
     )
     db.add(new_pf)
     db.flush()  # get new_pf.id

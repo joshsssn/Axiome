@@ -1,0 +1,79 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devPath": "http://localhost:5173",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "Axiome",
+    "version": "2.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "sidecar": true,
+        "scope": [
+          {
+            "name": "binaries/axiome-api",
+            "sidecar": true,
+            "args": true
+          }
+        ]
+      },
+      "process": {
+        "relaunch": true,
+        "exit": true
+      },
+      "window": {
+        "all": true
+      },
+      "dialog": {
+        "all": false
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "Finance",
+      "copyright": "Axiome",
+      "externalBin": ["binaries/axiome-api"],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.axiome.app",
+      "longDescription": "Multi-Asset Analytics Platform",
+      "shortDescription": "Axiome",
+      "targets": ["nsis", "msi"],
+      "windows": {
+        "nsis": {
+          "installerIcon": "icons/icon.ico",
+          "headerImage": null,
+          "sidebarImage": null,
+          "installMode": "currentUser",
+          "languages": ["English", "French"],
+          "displayLanguageSelector": true
+        }
+      }
+    },
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 900,
+        "resizable": true,
+        "title": "Axiome",
+        "width": 1400,
+        "center": true,
+        "minHeight": 600,
+        "minWidth": 800
+      }
+    ]
+  }
+}

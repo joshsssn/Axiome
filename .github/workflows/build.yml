@@ -1,0 +1,130 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '22'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            sidecar_ext: .exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            sidecar_ext: ''
+          - os: macos-13  # Intel Mac
+            target: x86_64-apple-darwin
+            sidecar_ext: ''
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Python ──
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Create venv & install Python deps
+        working-directory: API
+        run: |
+          python -m venv venv
+          ${{ runner.os == 'Windows' && '.\\venv\\Scripts\\pip' || './venv/bin/pip' }} install -r requirements.txt
+
+      # ── Build sidecar ──
+      - name: Build PyInstaller sidecar
+        working-directory: API
+        run: |
+          ${{ runner.os == 'Windows' && '.\\venv\\Scripts\\pyinstaller' || './venv/bin/pyinstaller' }} axiome_api.spec --noconfirm --clean
+
+      - name: Copy sidecar to Tauri binaries
+        shell: bash
+        run: |
+          mkdir -p UI/src-tauri/binaries
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            cp "API/dist/axiome-api/axiome-api.exe" "UI/src-tauri/binaries/axiome-api-${{ matrix.target }}.exe"
+            # Also copy the whole folder for bundled DLLs
+            cp -r "API/dist/axiome-api" "UI/src-tauri/binaries/axiome-api-${{ matrix.target }}-dir"
+          else
+            cp "API/dist/axiome-api/axiome-api" "UI/src-tauri/binaries/axiome-api-${{ matrix.target }}"
+            chmod +x "UI/src-tauri/binaries/axiome-api-${{ matrix.target }}"
+            cp -r "API/dist/axiome-api" "UI/src-tauri/binaries/axiome-api-${{ matrix.target }}-dir"
+          fi
+
+      # ── Node.js ──
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install npm dependencies
+        working-directory: UI
+        run: npm ci
+
+      # ── Rust ──
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: UI/src-tauri
+
+      # ── Generate icons if missing ──
+      - name: Generate default icons
+        working-directory: UI/src-tauri
+        shell: bash
+        run: |
+          if [ ! -f "icons/icon.ico" ]; then
+            npx --yes @tauri-apps/cli icon --input ../../API/app/icon.png 2>/dev/null || {
+              # Generate minimal placeholder icons with Python
+              python3 -c "
+          from PIL import Image
+          import os
+          os.makedirs('icons', exist_ok=True)
+          for size, name in [(32,'32x32.png'),(128,'128x128.png'),(256,'128x128@2x.png')]:
+              img = Image.new('RGBA', (size,size), (30,41,59,255))
+              img.save(f'icons/{name}')
+          # ICO
+          img = Image.new('RGBA', (256,256), (30,41,59,255))
+          img.save('icons/icon.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(256,256)])
+          # ICNS (just a PNG, macOS will handle)
+          img.save('icons/icon.icns')
+          "
+            }
+          fi
+
+      # ── Build Tauri ──
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: UI
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Axiome ${{ github.ref_name }}'
+          releaseBody: 'See the assets below for download links.'
+          releaseDraft: true
+          prerelease: false
+
+      # ── Upload artifacts (also available without a release) ──
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: axiome-${{ matrix.target }}
+          path: |
+            UI/src-tauri/target/release/bundle/nsis/*.exe
+            UI/src-tauri/target/release/bundle/msi/*.msi
+            UI/src-tauri/target/release/bundle/dmg/*.dmg
+            UI/src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: ignore

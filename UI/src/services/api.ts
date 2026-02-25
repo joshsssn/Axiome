@@ -1,12 +1,21 @@
-const API_URL = '/api/v1';
+// In dev mode, Vite proxies /api to the sidecar. In production (Tauri), connect directly.
+const API_URL = import.meta.env.DEV ? '/api/v1' : 'http://127.0.0.1:8742/api/v1';
+
+/** Current user ID — set by AuthContext when a user is selected */
+let _currentUserId: number | null = null;
+export function setCurrentUserId(id: number | null) { _currentUserId = id; }
+export function getCurrentUserId() { return _currentUserId; }
 
 export async function request(endpoint: string, options: RequestInit = {}) {
-    const token = localStorage.getItem('access_token');
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        ...(token && { Authorization: `Bearer ${token}` }),
         ...(options.headers as Record<string, string>),
     };
+
+    // Attach user ID header if set
+    if (_currentUserId != null) {
+        headers['X-User-Id'] = String(_currentUserId);
+    }
 
     const response = await fetch(`${API_URL}${endpoint}`, {
         ...options,
@@ -15,7 +24,13 @@ export async function request(endpoint: string, options: RequestInit = {}) {
 
     if (!response.ok) {
         const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(error.detail || 'API request failed');
+        const detail = error.detail;
+        const message = typeof detail === 'string'
+            ? detail
+            : Array.isArray(detail)
+                ? detail.map((e: any) => typeof e === 'string' ? e : (e.msg || JSON.stringify(e))).join('; ')
+                : (detail ? JSON.stringify(detail) : 'API request failed');
+        throw new Error(message);
     }
 
     // Handle 204 No Content
@@ -24,29 +39,14 @@ export async function request(endpoint: string, options: RequestInit = {}) {
 }
 
 export const api = {
-    // ─── Auth ───────────────────────────────────────────
-    auth: {
-        login: (username: string, password: string) =>
-            request('/login/access-token', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({ username, password }),
-            }),
-    },
-
-    // ─── Users ──────────────────────────────────────────
+    // ─── Users (multi-user) ─────────────────────────────
     users: {
-        me: () => request('/users/me'),
-        updateMe: (data: { email?: string; username?: string; display_name?: string; organization?: string; avatar_url?: string }) =>
-            request('/users/me', { method: 'PUT', body: JSON.stringify(data) }),
-        changePassword: (currentPassword: string, newPassword: string) =>
-            request('/users/me/password', {
-                method: 'PUT',
-                body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
-            }),
         list: () => request('/users/'),
-        create: (data: { username: string; email: string; password: string; role?: string }) =>
+        create: (data: { display_name: string; organization?: string; avatar_url?: string }) =>
             request('/users/', { method: 'POST', body: JSON.stringify(data) }),
+        get: (id: number) => request(`/users/${id}`),
+        update: (id: number, data: { display_name?: string; organization?: string; avatar_url?: string }) =>
+            request(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
         delete: (id: number) => request(`/users/${id}`, { method: 'DELETE' }),
     },
 
@@ -81,15 +81,6 @@ export const api = {
             request(`/portfolios/${id}/transactions`, { method: 'POST', body: JSON.stringify(data) }),
         deleteTransaction: (id: number, txId: number) =>
             request(`/portfolios/${id}/transactions/${txId}`, { method: 'DELETE' }),
-
-        // Collaborators
-        listCollaborators: (id: number) => request(`/portfolios/${id}/collaborators`),
-        addCollaborator: (id: number, data: { user_id: number; permission: string }) =>
-            request(`/portfolios/${id}/collaborators`, { method: 'POST', body: JSON.stringify(data) }),
-        updateCollaborator: (id: number, collabId: number, data: { permission: string }) =>
-            request(`/portfolios/${id}/collaborators/${collabId}`, { method: 'PUT', body: JSON.stringify(data) }),
-        deleteCollaborator: (id: number, collabId: number) =>
-            request(`/portfolios/${id}/collaborators/${collabId}`, { method: 'DELETE' }),
 
         // Analytics & Optimization
         getAnalytics: (id: number, params?: { benchmark?: string; start_date?: string; end_date?: string }) => {
@@ -127,5 +118,12 @@ export const api = {
         searchTicker: (query: string) => request(`/market-data/search/${encodeURIComponent(query)}`),
         validateTickers: (symbols: string[], currencyHints?: (string | null)[]) =>
             request('/market-data/validate-tickers', { method: 'POST', body: JSON.stringify({ symbols, currency_hints: currencyHints }) }),
+    },
+
+    // ─── JSON Portfolio Export/Import ────────────────────
+    portfolioJson: {
+        exportPortfolio: (id: number) => request(`/portfolios/${id}/export-json`),
+        importPortfolio: (data: any) =>
+            request('/portfolios/import-json', { method: 'POST', body: JSON.stringify(data) }),
     },
 };

@@ -38,7 +38,7 @@ def startup_event():
     init_db(db)
     db.close()
 
-    # Refresh prices in background — does NOT block the server from accepting requests
+    # Refresh prices in background - does NOT block the server from accepting requests
     t = threading.Thread(target=_background_price_refresh, daemon=True)
     t.start()
     logger.info("Background price refresh thread started")
@@ -72,3 +72,9 @@ def root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("AXIOME_PORT", "8742"))
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")

@@ -278,7 +278,7 @@ function OverviewSection({ result, currSym }: { result: any; currSym: string }) 
       <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-5">
         <h3 className="text-sm font-semibold text-white mb-4">Equity Curve — Portfolio vs Benchmark</h3>
         <ResponsiveContainer width="100%" height={360}>
-          <AreaChart data={result.equityCurve.filter((_: any, i: number) => i % 2 === 0)}>
+          <ComposedChart data={result.equityCurve.filter((_: any, i: number) => i % 2 === 0)}>
             <defs>
               <linearGradient id="btGradPf" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.15} />
@@ -292,7 +292,7 @@ function OverviewSection({ result, currSym }: { result: any; currSym: string }) 
               formatter={(v: number | undefined) => [`${currSym}${(v ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`]} />
             <Area type="monotone" dataKey="portfolio" name="Portfolio" stroke="#f59e0b" strokeWidth={2} fill="url(#btGradPf)" />
             <Line type="monotone" dataKey="benchmark" name="Benchmark" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="5 5" />
-          </AreaChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
 
@@ -366,7 +366,7 @@ function PerformanceSection({ result }: { result: any }) {
       <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-5">
         <h3 className="text-sm font-semibold text-white mb-4">Cumulative Return (%)</h3>
         <ResponsiveContainer width="100%" height={340}>
-          <AreaChart data={cumData}>
+          <ComposedChart data={cumData}>
             <defs>
               <linearGradient id="btCumGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.15} />
@@ -380,7 +380,7 @@ function PerformanceSection({ result }: { result: any }) {
               formatter={(v: number | undefined) => [`${(v ?? 0).toFixed(2)}%`]} />
             <Area type="monotone" dataKey="portfolio" name="Portfolio" stroke="#f59e0b" strokeWidth={2} fill="url(#btCumGrad)" />
             <Line type="monotone" dataKey="benchmark" name="Benchmark" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="5 5" />
-          </AreaChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
 

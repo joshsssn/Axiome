@@ -57,6 +57,38 @@ function detectCurrency(priceStr: string): { value: number; currency: string } {
     return { value: isNaN(value) ? 0 : value, currency };
 }
 
+/* ─── Smart number parser for shares/quantities ─── */
+function parseSmartNumber(raw: string): number {
+    let s = raw.replace(/\s/g, '');
+    // Remove leading currency symbols
+    s = s.replace(/^[$€£¥]/, '');
+    // If both comma and dot are present, the LAST one is the decimal separator
+    const lastComma = s.lastIndexOf(',');
+    const lastDot = s.lastIndexOf('.');
+    if (lastComma > -1 && lastDot > -1) {
+        if (lastComma > lastDot) {
+            // 1.000,50 → European: dots are thousands, comma is decimal
+            s = s.replace(/\./g, '').replace(',', '.');
+        } else {
+            // 1,000.50 → US: commas are thousands, dot is decimal
+            s = s.replace(/,/g, '');
+        }
+    } else if (lastComma > -1) {
+        // Only commas: check if it looks like thousands separator (e.g. 1,000) or decimal (e.g. 3,5)
+        const afterComma = s.slice(lastComma + 1);
+        if (afterComma.length === 3 && s.indexOf(',') === lastComma) {
+            // 1,000 → thousands separator
+            s = s.replace(/,/g, '');
+        } else {
+            // 3,5 or 1,50 → decimal separator
+            s = s.replace(',', '.');
+        }
+    }
+    // dots only: parseFloat handles natively
+    const val = parseFloat(s);
+    return isNaN(val) ? 0 : val;
+}
+
 /* ─── CSV parser ─── */
 function parseCSV(text: string): ParsedRow[] {
     const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -87,8 +119,9 @@ function parseCSV(text: string): ParsedRow[] {
         const currency = explicitCcy || detectedCcy;
         // Currency is detected if an explicit column exists or if symbol was found in price string
         const currencyDetected = !!(explicitCcy) || detectedCcy !== 'USD' || /[$€£¥]|CHF|EUR|GBP|JPY|SEK|NOK|DKK/i.test(cols[priceIdx] || '');
-        const sharesRaw = cols[sharesIdx]?.trim().replace(/,/g, '.') ?? '0';
-        const shares = parseFloat(sharesRaw) || 0;
+        // Smart number parsing for shares: handle thousands separators (1,000 or 1.000) and decimal separators
+        const sharesRawStr = (cols[sharesIdx] ?? '0').trim();
+        const shares = parseSmartNumber(sharesRawStr);
         const entryDate = cols[dateIdx]?.trim() || new Date().toISOString().split('T')[0];
 
         rows.push({
@@ -346,6 +379,8 @@ export function ImportInstruments({ onClose }: { onClose: () => void }) {
             }));
         } catch (e) {
             console.error('Validation failed', e);
+            // On network/API error, mark all still-pending rows as unresolved to avoid infinite spinner
+            setRows(prev => prev.map(r => r.status === 'pending' ? { ...r, status: 'unresolved' as const, errorMsg: 'Validation failed — check connection' } : r));
         } finally {
             setValidating(false);
         }
@@ -393,6 +428,39 @@ export function ImportInstruments({ onClose }: { onClose: () => void }) {
         validateTickers(rows);
     };
 
+    /* ─── Normalize date to YYYY-MM-DD ─── */
+    const normalizeDate = (raw: string): string => {
+        if (!raw) return new Date().toISOString().split('T')[0];
+        // Already ISO: 2024-01-15
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+        // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+        const euMatch = raw.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
+        if (euMatch) {
+            const [, a, b, y] = euMatch;
+            const day = parseInt(a), month = parseInt(b);
+            // If first number > 12, it must be a day (DD/MM/YYYY)
+            if (day > 12) return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+            // If second number > 12, it must be a day (MM/DD/YYYY)
+            if (month > 12) return `${y}-${a.padStart(2, '0')}-${b.padStart(2, '0')}`;
+            // Ambiguous: assume DD/MM/YYYY (European)
+            return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+        }
+        // MM/DD/YY or DD/MM/YY
+        const shortYear = raw.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2})$/);
+        if (shortYear) {
+            const [, a, b, yy] = shortYear;
+            const y = parseInt(yy) > 50 ? `19${yy}` : `20${yy}`;
+            const day = parseInt(a), month = parseInt(b);
+            if (day > 12) return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+            if (month > 12) return `${y}-${a.padStart(2, '0')}-${b.padStart(2, '0')}`;
+            return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+        }
+        // Try native Date parse as fallback
+        const d = new Date(raw);
+        if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+        return new Date().toISOString().split('T')[0];
+    };
+
     /* ─── Import ─── */
     const doImport = async () => {
         if (!pf) return;
@@ -404,20 +472,23 @@ export function ImportInstruments({ onClose }: { onClose: () => void }) {
             symbol: r.correctedTicker || r.ticker,
             quantity: r.shares,
             entry_price: r.purchasePrice,
-            entry_date: r.entryDate,
+            entry_date: normalizeDate(r.entryDate),
             currency: r.yfCurrency || r.currency,
             pricing_mode: 'market',
         }));
 
         try {
             const portfolioId = parseInt(pf.id);
+            if (isNaN(portfolioId)) {
+                throw new Error('Invalid portfolio — please select a valid portfolio before importing.');
+            }
             const result = await api.portfolios.importPositions(portfolioId, positions);
             setImportResult(result);
             setStep('done');
             refreshPortfolios();
-        } catch (e) {
+        } catch (e: any) {
             console.error('Import failed', e);
-            setImportResult({ imported: 0, errors: validRows.length, failed: [{ error: String(e) }] });
+            setImportResult({ imported: 0, errors: validRows.length, failed: [{ error: e?.message || String(e) }] });
             setStep('done');
         } finally {
             setImporting(false);

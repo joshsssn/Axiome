@@ -109,11 +109,9 @@ export interface StressScenario {
 
 export interface PortfolioData {
   id: string;
-  ownerId: number;
   summary: PortfolioSummaryData;
   positions: Position[];
   transactions: Transaction[];
-  collaborators: Collaborator[];
   performanceData: { date: string; portfolio: number; benchmark: number; portfolioReturn: number; benchmarkReturn: number }[];
   monthlyReturns: { month: string; portfolio: number; benchmark: number }[];
   returnDistribution: { bin: string; frequency: number }[];
@@ -487,23 +485,8 @@ export function generatePortfolioData(config: {
   // Sort by date descending
   transactions.sort((a, b) => b.date.localeCompare(a.date));
 
-  // Default collaborators based on seed
-  const collaborators: Collaborator[] = [];
-  if (seed !== 137) { // not all portfolios have collaborators
-    collaborators.push(
-      { id: 1, userId: 2, username: 'jsmith', email: 'john.smith@example.com', permission: 'view', addedDate: '2024-06-15', avatar: 'JS' },
-    );
-  }
-  if (seed === 42) {
-    collaborators.push(
-      { id: 2, userId: 3, username: 'agarcia', email: 'ana.garcia@example.com', permission: 'edit', addedDate: '2024-08-20', avatar: 'AG' },
-      { id: 3, userId: 5, username: 'lmueller', email: 'lisa.mueller@example.com', permission: 'view', addedDate: '2024-10-01', avatar: 'LM' },
-    );
-  }
-
   return {
     id,
-    ownerId: 1,
     summary: {
       name, description, currency, benchmark,
       totalValue: finalValue,
@@ -515,7 +498,6 @@ export function generatePortfolioData(config: {
     },
     positions,
     transactions,
-    collaborators,
     performanceData,
     monthlyReturns,
     returnDistribution,
@@ -600,30 +582,4 @@ export interface Transaction {
   notes: string;
 }
 
-export interface Collaborator {
-  id: number;
-  userId: number;
-  username: string;
-  email: string;
-  permission: 'view' | 'edit';
-  addedDate: string;
-  avatar: string;
-}
 
-export interface User {
-  id: number;
-  username: string;
-  email: string;
-  role: 'admin' | 'user';
-  status: 'active' | 'inactive';
-  lastLogin: string;
-  portfolioCount: number;
-}
-
-export const users: User[] = [
-  { id: 1, username: 'admin', email: 'admin@portfolio.io', role: 'admin', status: 'active', lastLogin: '2024-12-20 09:15', portfolioCount: 3 },
-  { id: 2, username: 'jsmith', email: 'john.smith@example.com', role: 'user', status: 'active', lastLogin: '2024-12-19 14:32', portfolioCount: 2 },
-  { id: 3, username: 'agarcia', email: 'ana.garcia@example.com', role: 'user', status: 'active', lastLogin: '2024-12-20 08:45', portfolioCount: 4 },
-  { id: 4, username: 'mchen', email: 'michael.chen@example.com', role: 'user', status: 'inactive', lastLogin: '2024-11-05 11:20', portfolioCount: 1 },
-  { id: 5, username: 'lmueller', email: 'lisa.mueller@example.com', role: 'user', status: 'active', lastLogin: '2024-12-18 16:50', portfolioCount: 2 },
-];

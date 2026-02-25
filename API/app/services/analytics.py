@@ -77,7 +77,7 @@ class AnalyticsService:
         if df_prices.empty or len(df_prices) < 5:
             return self._get_empty_analytics()
 
-        # ── Aggregate position quantities & entry dates ──
+        # -- Aggregate position quantities & entry dates --
         position_qty: Dict[str, float] = {}
         position_entry: Dict[str, date] = {}
         for p in portfolio.positions:
@@ -104,7 +104,7 @@ class AnalyticsService:
 
         returns = df_prices.pct_change().dropna()
 
-        # ── Dynamic weights: position-aware (weight=0 before entry_date) ──
+        # -- Dynamic weights: position-aware (weight=0 before entry_date) --
         qty_series = pd.Series({sym: position_qty[sym] for sym in valid_symbols})
         mask = pd.DataFrame(0.0, index=df_prices.index, columns=valid_symbols)
         for sym in valid_symbols:
