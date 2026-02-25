@@ -131,7 +131,7 @@ export function Backtesting() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-          <History className="w-7 h-7 text-amber-400" /> Backtesting
+          <History className="w-7 h-7 text-blue-400" /> Backtesting
         </h1>
         <p className="text-slate-400 text-sm mt-1">
           Test your portfolio's allocation against historical market data
@@ -145,7 +145,7 @@ export function Backtesting() {
           <button
             onClick={runBacktest}
             disabled={loading}
-            className="flex items-center gap-2 px-5 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-amber-600/20"
+            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-blue-600/20"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
             {loading ? 'Running...' : 'Run Backtest'}
@@ -157,30 +157,30 @@ export function Backtesting() {
           <div>
             <label className="text-xs text-slate-400 block mb-1.5 font-medium">Start Date</label>
             <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-              className="w-full bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-amber-500" />
+              className="w-full bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-blue-500" />
           </div>
           <div>
             <label className="text-xs text-slate-400 block mb-1.5 font-medium">End Date</label>
             <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-              className="w-full bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-amber-500" />
+              className="w-full bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-blue-500" />
           </div>
           {/* Capital */}
           <div>
             <label className="text-xs text-slate-400 block mb-1.5 font-medium">Initial Capital ({currSym})</label>
             <input type="number" value={capital} onChange={e => setCapital(Math.max(100, Number(e.target.value) || 10000))} min={100}
-              className="w-full bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-3 py-2 font-mono focus:outline-none focus:border-amber-500" />
+              className="w-full bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-3 py-2 font-mono focus:outline-none focus:border-blue-500" />
           </div>
           {/* Benchmark */}
           <div>
             <label className="text-xs text-slate-400 block mb-1.5 font-medium">Benchmark</label>
             <div className="flex gap-2">
               <select value={benchmark} onChange={e => { setBenchmark(e.target.value); setCustomBenchmark(''); }}
-                className="flex-1 bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-2 py-2 focus:outline-none focus:border-amber-500">
+                className="flex-1 bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white px-2 py-2 focus:outline-none focus:border-blue-500">
                 {BENCHMARK_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
               </select>
               <input type="text" placeholder="or ticker" value={customBenchmark}
                 onChange={e => { setCustomBenchmark(e.target.value.toUpperCase()); if (e.target.value) setBenchmark(''); }}
-                className="w-24 bg-slate-900/50 border border-slate-700 rounded-lg text-xs text-white px-2 py-2 font-mono placeholder:text-slate-500 focus:outline-none focus:border-amber-500" />
+                className="w-24 bg-slate-900/50 border border-slate-700 rounded-lg text-xs text-white px-2 py-2 font-mono placeholder:text-slate-500 focus:outline-none focus:border-blue-500" />
             </div>
           </div>
         </div>
@@ -202,7 +202,7 @@ export function Backtesting() {
             <div className="flex gap-1 bg-slate-900/50 rounded-lg p-0.5">
               {REBALANCE_OPTIONS.map(r => (
                 <button key={r.value} onClick={() => setRebalance(r.value)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${rebalance === r.value ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${rebalance === r.value ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>
                   {r.label}
                 </button>
               ))}
@@ -226,7 +226,7 @@ export function Backtesting() {
           <div className="flex gap-1 bg-slate-800/50 border border-slate-700/50 rounded-lg p-0.5 w-fit">
             {SECTION_TABS.map(t => (
               <button key={t.id} onClick={() => setSection(t.id)}
-                className={`px-4 py-2 text-xs font-medium rounded-md transition-all ${section === t.id ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                className={`px-4 py-2 text-xs font-medium rounded-md transition-all ${section === t.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>
                 {t.label}
               </button>
             ))}
@@ -270,7 +270,7 @@ function OverviewSection({ result, currSym }: { result: any; currSym: string }) 
         <KpiCard icon={gain ? TrendingUp : TrendingDown} color={gain ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'} label="Total Return" value={`${s.totalReturn > 0 ? '+' : ''}${s.totalReturn}%`} sub={`CAGR: ${s.cagr}%`} />
         <KpiCard icon={BarChart3} color="text-blue-400 bg-blue-500/10" label="Sharpe Ratio" value={s.sharpeRatio.toFixed(2)} sub={`Sortino: ${s.sortinoRatio.toFixed(2)}`} />
         <KpiCard icon={ShieldAlert} color="text-red-400 bg-red-500/10" label="Max Drawdown" value={`${s.maxDrawdown}%`} sub={`Vol: ${s.volatility}%`} />
-        <KpiCard icon={Target} color="text-amber-400 bg-amber-500/10" label="Win Rate" value={`${s.winRate}%`} sub={`Best: +${s.bestDay}%`} />
+        <KpiCard icon={Target} color="text-blue-400 bg-blue-500/10" label="Win Rate" value={`${s.winRate}%`} sub={`Best: +${s.bestDay}%`} />
         <KpiCard icon={RefreshCw} color="text-violet-400 bg-violet-500/10" label="Rebalances" value={String(s.rebalanceEvents)} sub={`${s.tradingDays} trading days`} />
       </div>
 
@@ -281,8 +281,8 @@ function OverviewSection({ result, currSym }: { result: any; currSym: string }) 
           <ComposedChart data={result.equityCurve.filter((_: any, i: number) => i % 2 === 0)}>
             <defs>
               <linearGradient id="btGradPf" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.15} />
-                <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
+                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -290,7 +290,7 @@ function OverviewSection({ result, currSym }: { result: any; currSym: string }) 
             <YAxis stroke="#64748b" tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${currSym}${(v / 1000).toFixed(1)}k`} />
             <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
               formatter={(v: number | undefined) => [`${currSym}${(v ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`]} />
-            <Area type="monotone" dataKey="portfolio" name="Portfolio" stroke="#f59e0b" strokeWidth={2} fill="url(#btGradPf)" />
+            <Area type="monotone" dataKey="portfolio" name="Portfolio" stroke="#3b82f6" strokeWidth={2} fill="url(#btGradPf)" />
             <Line type="monotone" dataKey="benchmark" name="Benchmark" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="5 5" />
           </ComposedChart>
         </ResponsiveContainer>
@@ -309,7 +309,7 @@ function OverviewSection({ result, currSym }: { result: any; currSym: string }) 
                 formatter={(v: number | undefined) => [`${(v ?? 0).toFixed(2)}%`]} />
               <Bar dataKey="portfolio" name="Portfolio" radius={[4, 4, 0, 0]}>
                 {result.yearlyReturns.map((e: any, i: number) => (
-                  <Cell key={i} fill={e.portfolio >= 0 ? '#f59e0b' : '#ef4444'} />
+                  <Cell key={i} fill={e.portfolio >= 0 ? '#3b82f6' : '#ef4444'} />
                 ))}
               </Bar>
               <Bar dataKey="benchmark" name="Benchmark" fill="#4b5563" radius={[4, 4, 0, 0]} />
@@ -325,7 +325,7 @@ function OverviewSection({ result, currSym }: { result: any; currSym: string }) 
           <table className="w-full text-xs">
             <thead><tr className="border-b border-slate-700/50">
               <th className="text-left px-3 py-2 text-slate-500 uppercase">Metric</th>
-              <th className="text-right px-3 py-2 text-amber-400 uppercase">Portfolio</th>
+              <th className="text-right px-3 py-2 text-blue-400 uppercase">Portfolio</th>
               <th className="text-right px-3 py-2 text-slate-400 uppercase">Benchmark</th>
             </tr></thead>
             <tbody>
@@ -369,8 +369,8 @@ function PerformanceSection({ result }: { result: any }) {
           <ComposedChart data={cumData}>
             <defs>
               <linearGradient id="btCumGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.15} />
-                <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
+                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -378,7 +378,7 @@ function PerformanceSection({ result }: { result: any }) {
             <YAxis stroke="#64748b" tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}%`} />
             <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
               formatter={(v: number | undefined) => [`${(v ?? 0).toFixed(2)}%`]} />
-            <Area type="monotone" dataKey="portfolio" name="Portfolio" stroke="#f59e0b" strokeWidth={2} fill="url(#btCumGrad)" />
+            <Area type="monotone" dataKey="portfolio" name="Portfolio" stroke="#3b82f6" strokeWidth={2} fill="url(#btCumGrad)" />
             <Line type="monotone" dataKey="benchmark" name="Benchmark" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="5 5" />
           </ComposedChart>
         </ResponsiveContainer>
@@ -458,6 +458,7 @@ function PerformanceSection({ result }: { result: any }) {
 function RiskSection({ result }: { result: any }) {
   const ddData = (result.drawdownData ?? []).filter((_: any, i: number) => i % 2 === 0);
   const rvData = result.rollingVolatility ?? [];
+  const rcData = result.rollingCorrelation ?? [];
   const rm = result.riskMetrics ?? {};
 
   return (
@@ -538,12 +539,29 @@ function RiskSection({ result }: { result: any }) {
               <YAxis stroke="#64748b" tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v.toFixed(0)}%`} />
               <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
                 formatter={(v: number | undefined) => [`${(v ?? 0).toFixed(2)}%`]} />
-              <Line type="monotone" dataKey="portfolio" name="Portfolio Vol" stroke="#f59e0b" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="portfolio" name="Portfolio Vol" stroke="#3b82f6" strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="benchmark" name="Benchmark Vol" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="5 5" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* Rolling Correlation */}
+      {rcData.length > 0 && (
+        <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-5">
+          <h3 className="text-sm font-semibold text-white mb-4">Rolling 60-Day Correlation with Benchmark</h3>
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={rcData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+              <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 10 }} tickFormatter={(d: string) => d.slice(5)} interval={Math.max(1, Math.floor(rcData.length / 6))} />
+              <YAxis stroke="#64748b" tick={{ fontSize: 11 }} domain={[-1, 1]} tickFormatter={(v: number) => v.toFixed(1)} />
+              <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
+                formatter={(v: number | undefined) => [`${(v ?? 0).toFixed(3)}`, 'Correlation']} />
+              <Line type="monotone" dataKey="correlation" name="Correlation" stroke="#8b5cf6" strokeWidth={2} dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }
@@ -568,7 +586,7 @@ function AttributionSection({ result }: { result: any }) {
               formatter={(v: number | undefined) => [`${(v ?? 0).toFixed(2)}%`]} />
             <Bar dataKey="contribution" name="Contribution" radius={[0, 4, 4, 0]}>
               {attribs.map((e: any, i: number) => (
-                <Cell key={i} fill={e.contribution >= 0 ? '#f59e0b' : '#ef4444'} />
+                <Cell key={i} fill={e.contribution >= 0 ? '#3b82f6' : '#ef4444'} />
               ))}
             </Bar>
           </BarChart>
@@ -591,7 +609,7 @@ function AttributionSection({ result }: { result: any }) {
             <tbody>
               {attribs.map((a: any) => (
                 <tr key={a.symbol} className="border-b border-slate-700/20 hover:bg-slate-700/20 transition-colors">
-                  <td className="px-3 py-2.5 font-mono font-semibold text-amber-400">{a.symbol}</td>
+                  <td className="px-3 py-2.5 font-mono font-semibold text-blue-400">{a.symbol}</td>
                   <td className="px-3 py-2.5 text-right font-mono text-slate-300">{a.weight}%</td>
                   <td className={`px-3 py-2.5 text-right font-mono font-medium ${a.totalReturn >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {a.totalReturn > 0 ? '+' : ''}{a.totalReturn}%
@@ -638,7 +656,7 @@ function TradesSection({ result, currSym, expanded, setExpanded }: {
                 className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-slate-700/20 transition-colors">
                 <div className="flex items-center gap-3">
                   {expanded === i ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
-                  <Calendar className="w-4 h-4 text-amber-400" />
+                  <Calendar className="w-4 h-4 text-blue-400" />
                   <span className="text-sm text-white font-mono">{t.date}</span>
                   <span className="text-xs text-slate-500">{t.trades?.length ?? 0} adjustment{(t.trades?.length ?? 0) !== 1 ? 's' : ''}</span>
                 </div>
@@ -654,7 +672,7 @@ function TradesSection({ result, currSym, expanded, setExpanded }: {
                     <tbody>
                       {t.trades.map((tr: any, j: number) => (
                         <tr key={j} className="border-b border-slate-700/20">
-                          <td className="py-1.5 font-mono text-amber-400">{tr.symbol}</td>
+                          <td className="py-1.5 font-mono text-blue-400">{tr.symbol}</td>
                           <td className={`py-1.5 text-right font-mono font-medium ${tr.delta >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                             {tr.delta > 0 ? '+' : ''}{tr.delta}%
                           </td>
@@ -691,7 +709,7 @@ function KpiCard({ icon: Icon, color, label, value, sub }: {
 }
 
 function SectionHeader({ title }: { title: string }) {
-  return <div className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider pt-4 pb-2 border-b border-slate-700/50">{title}</div>;
+  return <div className="text-[11px] font-semibold text-blue-400 uppercase tracking-wider pt-4 pb-2 border-b border-slate-700/50">{title}</div>;
 }
 
 function MetricRow({ label, value, positive }: { label: string; value: string; positive?: boolean }) {
@@ -719,7 +737,7 @@ function SummaryRow({ label, pf, bench, pfBetter }: { label: string; pf: string;
 function WeightChart({ data }: { data: any[] }) {
   if (!data.length) return null;
   const keys = Object.keys(data[0]).filter(k => k !== 'date');
-  const colors = ['#f59e0b', '#3b82f6', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#6366f1', '#14b8a6'];
+  const colors = ['#3b82f6', '#6366f1', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f59e0b', '#14b8a6'];
   return (
     <>
       <ResponsiveContainer width="100%" height={280}>

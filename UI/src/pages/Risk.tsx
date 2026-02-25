@@ -116,14 +116,14 @@ export function Risk() {
               <tr>
                 <th className="px-2 py-2" />
                 {pf.correlationMatrix.labels.map((l: string) => (
-                  <th key={l} className="px-2 py-2 text-slate-400 font-mono font-medium whitespace-nowrap">{l}</th>
+                  <th key={l} className="px-2 py-2 text-slate-400 font-mono font-medium max-w-[56px] truncate" title={l}>{l}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {pf.correlationMatrix.labels.map((label: string, i: number) => (
                 <tr key={label}>
-                  <td className="px-2 py-1.5 text-slate-400 font-mono font-medium whitespace-nowrap">{label}</td>
+                  <td className="px-2 py-1.5 text-slate-400 font-mono font-medium max-w-[56px] truncate" title={label}>{label}</td>
                   {pf.correlationMatrix.data[i].map((val: number, j: number) => (
                     <td key={j} className="px-1 py-1">
                       <div className={`w-12 h-8 flex items-center justify-center rounded font-mono text-[10px] font-medium ${getCorrelationColor(val)}`}>

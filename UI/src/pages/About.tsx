@@ -1,4 +1,10 @@
 import { Heart, Github, Mail } from 'lucide-react';
+import { open } from '@tauri-apps/api/shell';
+
+const openExternal = (url: string) => (e: React.MouseEvent) => {
+  e.preventDefault();
+  open(url).catch(() => window.open(url, '_blank'));
+};
 
 export function About() {
   return (
@@ -33,16 +39,16 @@ export function About() {
           <div className="flex gap-4">
             <a
               href="https://github.com/joshsssn"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-colors"
+              onClick={openExternal('https://github.com/joshsssn')}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-colors cursor-pointer"
             >
               <Github className="w-4 h-4" />
               GitHub
             </a>
             <a
               href="mailto:josh.soussan.candidatures@gmail.com"
-              className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-colors select-all"
+              onClick={openExternal('mailto:josh.soussan.candidatures@gmail.com')}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-colors cursor-pointer"
               title="Click to email josh.soussan.candidatures@gmail.com"
             >
               <Mail className="w-4 h-4" />
@@ -83,9 +89,8 @@ export function About() {
             For full license details, visit{' '}
             <a
               href="https://www.apache.org/licenses/LICENSE-2.0"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-400 hover:text-blue-300 underline"
+              onClick={openExternal('https://www.apache.org/licenses/LICENSE-2.0')}
+              className="text-blue-400 hover:text-blue-300 underline cursor-pointer"
             >
               Apache License 2.0
             </a>

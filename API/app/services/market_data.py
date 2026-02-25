@@ -56,14 +56,24 @@ def _cache_set(key: str, value: Any):
 # -------------- yfinance value normalization --------------
 _QUOTE_TYPE_MAP: Dict[str, str] = {
     "EQUITY": "Equity",
+    "EQUITIES": "Equity",
     "STOCK": "Equity",
+    "STOCKS": "Equity",
     "ETF": "ETF",
+    "ETFS": "ETF",
     "MUTUALFUND": "ETF",
+    "MUTUAL FUND": "ETF",
     "FUTURE": "Futures",
+    "FUTURES": "Futures",
     "OPTION": "Option",
+    "OPTIONS": "Option",
     "INDEX": "Index",
-    "CRYPTOCURRENCY": "Equity",
+    "CRYPTOCURRENCY": "Crypto",
+    "CRYPTO": "Crypto",
     "CURRENCY": "Equity",
+    "BOND": "Bond",
+    "BONDS": "Bond",
+    "FIXED INCOME": "Bond",
 }
 
 _SECTOR_MAP: Dict[str, str] = {

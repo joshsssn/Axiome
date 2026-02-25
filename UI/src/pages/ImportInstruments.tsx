@@ -634,7 +634,7 @@ export function ImportInstruments({ onClose }: { onClose: () => void }) {
                             {/* Table */}
                             <div className="overflow-auto rounded-xl border border-white/10 max-h-[50vh]">
                                 <table className="w-full text-sm">
-                                    <thead className="bg-white/5 sticky top-0 z-10">
+                                    <thead className="bg-slate-900 sticky top-0 z-10">
                                         <tr className="text-left text-slate-400">
                                             <th className="px-4 py-3">Status</th>
                                             <th className="px-4 py-3">Ticker</th>

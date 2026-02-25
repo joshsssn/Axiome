@@ -234,6 +234,17 @@ class BacktestingService:
             })
         result["rollingVolatility"] = rv
 
+        # -- rolling correlation with benchmark (60d)
+        roll_corr = pf_returns.rolling(60).corr(bench_returns)
+        rc = []
+        rc_sampled = roll_corr.dropna().iloc[::5]
+        for dt in rc_sampled.index:
+            rc.append({
+                "date": dt.strftime("%Y-%m-%d"),
+                "correlation": round(_safe_float(roll_corr.loc[dt]), 3),
+            })
+        result["rollingCorrelation"] = rc
+
         # -- underwater chart (same as drawdown, but with recovery markers)
         result["underwaterData"] = dd_list  # reuse
 
@@ -349,5 +360,6 @@ class BacktestingService:
             "tradeLog": [],
             "weightHistory": [],
             "rollingVolatility": [],
+            "rollingCorrelation": [],
             "underwaterData": [],
         }

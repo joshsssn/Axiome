@@ -58,15 +58,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const mapped = list.map(mapUser);
         setUsers(mapped);
 
-        // Auto-select last used user
-        const savedId = localStorage.getItem(USER_ID_KEY);
-        if (savedId) {
-          const found = mapped.find(u => u.id === parseInt(savedId));
-          if (found) {
-            setCurrentUser(found);
-            setCurrentUserId(found.id);
-          }
-        }
+        // Don't auto-select — always start on UserPicker so the user
+        // explicitly chooses their profile on each launch.
         setIsLoading(false);
       } catch (e) {
         console.warn(`Failed to load users (attempt ${attempt + 1}/${MAX_RETRIES})`, e);

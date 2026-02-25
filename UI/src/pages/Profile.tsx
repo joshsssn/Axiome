@@ -1,9 +1,10 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import {
   User, Building2, Camera, Check, Shield,
-  Upload
+  Upload, Power,
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/tauri';
 
 export function Profile() {
   const { currentUser, updateUser } = useAuth();
@@ -14,6 +15,14 @@ export function Profile() {
 
   const [saved, setSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /* Kill-API-on-quit preference */
+  const [killApiOnQuit, setKillApiOnQuit] = useState(() => localStorage.getItem('killApiOnQuit') === 'true');
+
+  useEffect(() => {
+    localStorage.setItem('killApiOnQuit', String(killApiOnQuit));
+    invoke('set_kill_api_on_quit', { kill: killApiOnQuit }).catch(() => {});
+  }, [killApiOnQuit]);
 
   const initials = displayName
     ? displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
@@ -154,6 +163,28 @@ export function Profile() {
           </button>
           {saved && <span className="text-xs text-emerald-400">Profile updated successfully</span>}
         </div>
+      </div>
+
+      {/* Application Settings */}
+      <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
+        <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+          <Power className="w-4 h-4 text-blue-400" />
+          Application Settings
+        </h3>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={killApiOnQuit}
+            onChange={e => setKillApiOnQuit(e.target.checked)}
+            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-blue-500/30"
+          />
+          <div>
+            <span className="text-sm text-white">Kill API server when closing the app</span>
+            <p className="text-[10px] text-slate-500 mt-0.5">
+              When enabled, the background API process will be terminated when you close Axiome. Disable to keep the API running for external tools.
+            </p>
+          </div>
+        </label>
       </div>
 
     </div>

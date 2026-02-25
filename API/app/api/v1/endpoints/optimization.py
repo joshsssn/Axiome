@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import date
 
 from app.api import deps
+from app.api.deps import get_current_user_id
 from app.models.portfolio import Portfolio, Position
 from app.models.instrument import Instrument
 from app.services.optimization import OptimizationService
@@ -72,6 +73,7 @@ def save_optimized_portfolio(
     id: int,
     name: str = Body(...),
     weights: Dict[str, float] = Body(...),
+    user_id: Optional[int] = Depends(deps.get_current_user_id),
     _: bool = Depends(deps.verify_session),
 ) -> Any:
     """
@@ -98,6 +100,8 @@ def save_optimized_portfolio(
         name=name or f"Optimized - {source.name}",
         description=f"Optimized version of '{source.name}'",
         currency=source.currency,
+        owner_id=user_id,
+        benchmark_symbol=source.benchmark_symbol,
     )
     db.add(new_pf)
     db.flush()  # get new_pf.id

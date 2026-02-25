@@ -404,6 +404,65 @@ class AnalyticsService:
             logger.error(f"Error computing rolling correlation: {e}")
             return []
 
+    @staticmethod
+    def _normalize_alloc_key(attr: str, raw_key: str) -> str:
+        """Normalize allocation category keys to prevent duplicates."""
+        if not raw_key:
+            return 'Unknown'
+        normalized = raw_key.strip().upper()
+        if attr == 'asset_class':
+            _ALLOC_CLASS_MAP = {
+                'EQUITY': 'Equity', 'EQUITIES': 'Equity', 'STOCK': 'Equity', 'STOCKS': 'Equity',
+                'ETF': 'ETF', 'ETFS': 'ETF', 'MUTUAL FUND': 'ETF',
+                'BOND': 'Bond', 'BONDS': 'Bond', 'FIXED INCOME': 'Bond',
+                'FUTURES': 'Futures', 'FUTURE': 'Futures',
+                'OPTION': 'Option', 'OPTIONS': 'Option',
+                'INDEX': 'Index',
+                'CRYPTO': 'Crypto', 'CRYPTOCURRENCY': 'Crypto',
+                'CURRENCY': 'Currency',
+            }
+            return _ALLOC_CLASS_MAP.get(normalized, raw_key.strip().title())
+        if attr == 'country':
+            _ALLOC_COUNTRY_MAP = {
+                'US': 'United States', 'USA': 'United States', 'UNITED STATES': 'United States',
+                'UNITED STATES OF AMERICA': 'United States', 'U.S.': 'United States',
+                'U.S.A.': 'United States', 'AMERICA': 'United States',
+                'UK': 'United Kingdom', 'UNITED KINGDOM': 'United Kingdom',
+                'GB': 'United Kingdom', 'GREAT BRITAIN': 'United Kingdom',
+                'ENGLAND': 'United Kingdom',
+                'CN': 'China', 'CHINA': 'China', 'PRC': 'China',
+                'JP': 'Japan', 'JAPAN': 'Japan',
+                'DE': 'Germany', 'GERMANY': 'Germany',
+                'FR': 'France', 'FRANCE': 'France',
+                'CA': 'Canada', 'CANADA': 'Canada',
+                'AU': 'Australia', 'AUSTRALIA': 'Australia',
+                'KR': 'South Korea', 'SOUTH KOREA': 'South Korea', 'KOREA': 'South Korea',
+                'IN': 'India', 'INDIA': 'India',
+                'BR': 'Brazil', 'BRAZIL': 'Brazil',
+                'CH': 'Switzerland', 'SWITZERLAND': 'Switzerland',
+                'TW': 'Taiwan', 'TAIWAN': 'Taiwan',
+                'NL': 'Netherlands', 'NETHERLANDS': 'Netherlands', 'HOLLAND': 'Netherlands',
+                'HK': 'Hong Kong', 'HONG KONG': 'Hong Kong',
+                'ES': 'Spain', 'SPAIN': 'Spain',
+                'IT': 'Italy', 'ITALY': 'Italy',
+                'SE': 'Sweden', 'SWEDEN': 'Sweden',
+                'SG': 'Singapore', 'SINGAPORE': 'Singapore',
+                'IE': 'Ireland', 'IRELAND': 'Ireland',
+                'IL': 'Israel', 'ISRAEL': 'Israel',
+                'DK': 'Denmark', 'DENMARK': 'Denmark',
+                'NO': 'Norway', 'NORWAY': 'Norway',
+                'FI': 'Finland', 'FINLAND': 'Finland',
+                'BE': 'Belgium', 'BELGIUM': 'Belgium',
+                'MX': 'Mexico', 'MEXICO': 'Mexico',
+                'ZA': 'South Africa', 'SOUTH AFRICA': 'South Africa',
+                'RU': 'Russia', 'RUSSIA': 'Russia',
+                'AT': 'Austria', 'AUSTRIA': 'Austria',
+                'NZ': 'New Zealand', 'NEW ZEALAND': 'New Zealand',
+                'PT': 'Portugal', 'PORTUGAL': 'Portugal',
+            }
+            return _ALLOC_COUNTRY_MAP.get(normalized, raw_key.strip().title())
+        return raw_key.strip().title() if raw_key else 'Unknown'
+
     def _calculate_allocation(self, positions: List[Position], weights: Dict[str, float], attr: str) -> List[AllocationItem]:
         allocs: Dict[str, float] = {}
         seen_symbols: set = set()
@@ -413,7 +472,8 @@ class AnalyticsService:
                 continue  # Only count each symbol once (weights are already aggregated)
             seen_symbols.add(sym)
             if p.instrument and sym in weights:
-                key = getattr(p.instrument, attr, None) or 'Unknown'
+                raw_key = getattr(p.instrument, attr, None) or 'Unknown'
+                key = self._normalize_alloc_key(attr, raw_key)
                 allocs[key] = allocs.get(key, 0) + weights[sym]
             elif sym in weights:
                 allocs['Unknown'] = allocs.get('Unknown', 0) + weights[sym]

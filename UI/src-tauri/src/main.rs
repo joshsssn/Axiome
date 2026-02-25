@@ -5,6 +5,7 @@
 
 use tauri::Manager;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // In release mode, use the Tauri sidecar API.
 // In dev mode, we spawn Python directly (the PyInstaller sidecar can't find
@@ -18,13 +19,24 @@ struct ApiState {
     child: Mutex<Option<std::process::Child>>,
     #[cfg(not(debug_assertions))]
     child: Mutex<Option<tauri::api::process::CommandChild>>,
+    /// PID of the sidecar process (used for taskkill in release mode)
+    sidecar_pid: Mutex<Option<u32>>,
+    kill_on_quit: AtomicBool,
+}
+
+#[tauri::command]
+fn set_kill_api_on_quit(state: tauri::State<ApiState>, kill: bool) {
+    state.kill_on_quit.store(kill, Ordering::Relaxed);
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(ApiState {
             child: Mutex::new(None),
+            sidecar_pid: Mutex::new(None),
+            kill_on_quit: AtomicBool::new(false),
         })
+        .invoke_handler(tauri::generate_handler![set_kill_api_on_quit])
         .setup(|app| {
             // -- Dev mode: start Python API directly --
             #[cfg(debug_assertions)]
@@ -64,8 +76,10 @@ fn main() {
                     .spawn()
                     .expect("failed to spawn sidecar");
 
+                let pid = child.pid();
                 let state: tauri::State<ApiState> = app.state();
                 *state.child.lock().unwrap() = Some(child);
+                *state.sidecar_pid.lock().unwrap() = Some(pid);
 
                 tauri::async_runtime::spawn(async move {
                     while let Some(event) = rx.recv().await {
@@ -83,6 +97,12 @@ fn main() {
         .on_window_event(|event| {
             if let tauri::WindowEvent::Destroyed = event.event() {
                 let state: tauri::State<ApiState> = event.window().state();
+
+                // Only kill the API process if the user opted in
+                if !state.kill_on_quit.load(Ordering::Relaxed) {
+                    return;
+                }
+
                 // Take the child out of the mutex immediately so the guard
                 // is dropped before `state`, avoiding lifetime issues.
                 let child_opt = state.child.lock().unwrap().take();
@@ -101,6 +121,16 @@ fn main() {
 
                 #[cfg(not(debug_assertions))]
                 {
+                    // Kill the sidecar via its PID + entire process tree.
+                    // CommandChild::kill() only kills the wrapper; the inner
+                    // Python process (PyInstaller onefile) survives.
+                    let pid_opt = state.sidecar_pid.lock().unwrap().take();
+                    if let Some(pid) = pid_opt {
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/PID", &pid.to_string(), "/T", "/F"])
+                            .output();
+                    }
+                    // Also call the Tauri kill as a fallback
                     if let Some(child) = child_opt {
                         let _ = child.kill();
                     }

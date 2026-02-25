@@ -180,6 +180,47 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         if (!cancelled) {
           setIsLoading(false);
           initialLoadDone.current = true;
+
+          // Preload details + analytics for ALL portfolios in background
+          const allIds = pfs.map((p: any) => p.id as number);
+          setTimeout(() => {
+            allIds.forEach(pid => {
+              Promise.all([
+                api.portfolios.get(pid).catch(() => null),
+                api.portfolios.getAnalytics(pid).catch(() => null),
+              ]).then(([details, analytics]) => {
+                if (cancelled || !details) return;
+                setPortfolios(prev => prev.map(pf => {
+                  if (pf.id !== String(pid)) return pf;
+                  // Only update if we don't already have positions loaded
+                  if (pf.positions.length > 0) return pf;
+                  const positions: Position[] = (details.positions ?? []).map(mapPosition);
+                  const summary = details.summary ?? {};
+                  const totalValue = summary.totalValue ?? positions.reduce((s: number, p: Position) => s + p.quantity * p.currentPrice, 0);
+                  if (totalValue > 0) {
+                    positions.forEach(p => { p.weight = parseFloat(((p.quantity * p.currentPrice / totalValue) * 100).toFixed(1)); });
+                  }
+                  const a = analytics ?? {};
+                  return {
+                    ...pf,
+                    summary: { ...pf.summary, totalValue: Math.round(totalValue), dailyPnl: summary.dailyPnl ?? 0, totalPnl: summary.totalPnl ?? 0, totalPnlPct: summary.totalPnlPct ?? 0, positionCount: positions.length },
+                    positions,
+                    riskMetrics: a.riskMetrics ? { ...EMPTY_RISK, ...a.riskMetrics } : pf.riskMetrics,
+                    performanceData: a.performanceData ?? pf.performanceData,
+                    monthlyReturns: a.monthlyReturns ?? pf.monthlyReturns,
+                    correlationMatrix: a.correlationMatrix ?? pf.correlationMatrix,
+                    rollingCorrelation: a.rollingCorrelation ?? pf.rollingCorrelation,
+                    rollingVolatility: a.rollingVolatility ?? pf.rollingVolatility,
+                    drawdownData: a.drawdownData ?? pf.drawdownData,
+                    allocationByClass: a.allocationByClass ?? pf.allocationByClass,
+                    allocationBySector: a.allocationBySector ?? pf.allocationBySector,
+                    allocationByCountry: a.allocationByCountry ?? pf.allocationByCountry,
+                    returnDistribution: a.returnDistribution ?? pf.returnDistribution,
+                  };
+                }));
+              }).catch(() => {});
+            });
+          }, 300);
         }
       } catch (err) {
         console.warn(`Fetch portfolios failed (attempt ${attempt + 1}/${MAX_RETRIES})`, err);
@@ -354,6 +395,8 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         ...(pos.pricingMode === 'fixed' && pos.currentPrice ? { current_price: pos.currentPrice } : {}),
       });
       refreshDetail();
+      // Schedule a delayed refresh to pick up updated prices from background sync
+      setTimeout(() => refreshDetail(), 4000);
     } catch (e) { console.error('Add position failed', e); }
   }, [activePortfolioId, refreshDetail]);
 

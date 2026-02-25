@@ -378,20 +378,41 @@ function PerformanceSection({ pfA, pfB, srcA, srcB, range, setRange, benchmark, 
   const riskA: RiskMetricsData = srcA?.riskMetrics ?? pfA.riskMetrics;
   const riskB: RiskMetricsData = srcB?.riskMetrics ?? pfB.riskMetrics;
 
-  /* Merge perf datasets for overlay chart (align by date) */
+  /* Merge perf datasets for overlay chart (align by date) + rebase to common start */
   const mergedPerf = useMemo(() => {
     const map = new Map<string, any>();
     perfA.forEach((d: any) => { map.set(d.date, { date: d.date, returnA: d.portfolioReturn, benchmarkReturn: d.benchmarkReturn }); });
     perfB.forEach((d: any) => { const e = map.get(d.date) ?? { date: d.date }; e.returnB = d.portfolioReturn; if (!e.benchmarkReturn) e.benchmarkReturn = d.benchmarkReturn; map.set(d.date, e); });
-    return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+    // Rebase to the first date where both portfolios have data
+    const firstCommon = sorted.find(d => d.returnA !== undefined && d.returnB !== undefined);
+    if (firstCommon) {
+      const offsetA = firstCommon.returnA ?? 0;
+      const offsetB = firstCommon.returnB ?? 0;
+      const offsetBm = firstCommon.benchmarkReturn ?? 0;
+      sorted.forEach(d => {
+        if (d.returnA !== undefined) d.returnA = parseFloat((d.returnA - offsetA).toFixed(4));
+        if (d.returnB !== undefined) d.returnB = parseFloat((d.returnB - offsetB).toFixed(4));
+        if (d.benchmarkReturn !== undefined) d.benchmarkReturn = parseFloat((d.benchmarkReturn - offsetBm).toFixed(4));
+      });
+    }
+    return sorted;
   }, [perfA, perfB]);
 
-  /* Last 12 months merged */
+  /* Last 12 months merged — chronological sort (format: "Mon YY") */
   const mergedMonthly = useMemo(() => {
+    const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const monthOrder = (m: string) => {
+      const parts = m.split(' ');
+      const mi = MON.indexOf(parts[0]);
+      const yr = parseInt(parts[1] ?? '0', 10);
+      return yr * 100 + (mi >= 0 ? mi : 0);
+    };
     const map = new Map<string, any>();
     monthlyA.forEach((d: any) => map.set(d.month, { month: d.month, portfolioA: d.portfolio, benchmarkA: d.benchmark }));
     monthlyB.forEach((d: any) => { const e = map.get(d.month) ?? { month: d.month }; e.portfolioB = d.portfolio; map.set(d.month, e); });
-    return [...map.values()].sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
+    return [...map.values()].sort((a, b) => monthOrder(a.month) - monthOrder(b.month)).slice(-12);
   }, [monthlyA, monthlyB]);
 
   return (
@@ -587,8 +608,8 @@ function RiskSection({ pfA, pfB, srcA, srcB, varDays, setVarDays, getSlice }: {
 
       {/* Top KPI Cards — 4 per portfolio */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <RiskKpiCard icon={ShieldAlert} color="text-amber-400 bg-amber-500/10" label={`VaR 95% (${varLabel})`} vA={`${sA.var95}%`} vB={`${sB.var95}%`} nameA={pfA.summary.name} nameB={pfB.summary.name} higherGreen={false} nA={sA.var95} nB={sB.var95} />
-        <RiskKpiCard icon={TrendingDown} color="text-red-400 bg-red-500/10" label="Max Drawdown" vA={`${mA.maxDrawdown}%`} vB={`${mB.maxDrawdown}%`} nameA={pfA.summary.name} nameB={pfB.summary.name} higherGreen={false} nA={mA.maxDrawdown} nB={mB.maxDrawdown} />
+        <RiskKpiCard icon={ShieldAlert} color="text-amber-400 bg-amber-500/10" label={`VaR 95% (${varLabel})`} vA={`${sA.var95}%`} vB={`${sB.var95}%`} nameA={pfA.summary.name} nameB={pfB.summary.name} higherGreen nA={sA.var95} nB={sB.var95} />
+        <RiskKpiCard icon={TrendingDown} color="text-red-400 bg-red-500/10" label="Max Drawdown" vA={`${mA.maxDrawdown}%`} vB={`${mB.maxDrawdown}%`} nameA={pfA.summary.name} nameB={pfB.summary.name} higherGreen nA={mA.maxDrawdown} nB={mB.maxDrawdown} />
         <RiskKpiCard icon={BarChart3} color="text-blue-400 bg-blue-500/10" label="Sharpe Ratio" vA={mA.sharpeRatio.toFixed(2)} vB={mB.sharpeRatio.toFixed(2)} nameA={pfA.summary.name} nameB={pfB.summary.name} higherGreen nA={mA.sharpeRatio} nB={mB.sharpeRatio} />
         <RiskKpiCard icon={Activity} color="text-violet-400 bg-violet-500/10" label="Beta" vA={mA.beta.toFixed(2)} vB={mB.beta.toFixed(2)} nameA={pfA.summary.name} nameB={pfB.summary.name} higherGreen={false} nA={mA.beta} nB={mB.beta} />
       </div>
@@ -633,10 +654,10 @@ function RiskSection({ pfA, pfB, srcA, srcB, varDays, setVarDays, getSlice }: {
               <CompRow label="Skewness" a={fmtNum(mA.skewness)} b={fmtNum(mB.skewness)} av={mA.skewness} bv={mB.skewness} higherGreen />
               <CompRow label="Kurtosis" a={fmtNum(mA.kurtosis)} b={fmtNum(mB.kurtosis)} av={mA.kurtosis} bv={mB.kurtosis} higherGreen={false} />
               <SectionHeaderRow title={`Value at Risk (${varLabel})`} />
-              <CompRow label="VaR (95%)" a={`${sA.var95}%`} b={`${sB.var95}%`} av={sA.var95} bv={sB.var95} higherGreen={false} />
-              <CompRow label="VaR (99%)" a={`${sA.var99}%`} b={`${sB.var99}%`} av={sA.var99} bv={sB.var99} higherGreen={false} />
-              <CompRow label="CVaR (95%)" a={`${sA.cvar95}%`} b={`${sB.cvar95}%`} av={sA.cvar95} bv={sB.cvar95} higherGreen={false} />
-              <CompRow label="CVaR (99%)" a={`${sA.cvar99}%`} b={`${sB.cvar99}%`} av={sA.cvar99} bv={sB.cvar99} higherGreen={false} />
+              <CompRow label="VaR (95%)" a={`${sA.var95}%`} b={`${sB.var95}%`} av={sA.var95} bv={sB.var95} higherGreen />
+              <CompRow label="VaR (99%)" a={`${sA.var99}%`} b={`${sB.var99}%`} av={sA.var99} bv={sB.var99} higherGreen />
+              <CompRow label="CVaR (95%)" a={`${sA.cvar95}%`} b={`${sB.cvar95}%`} av={sA.cvar95} bv={sB.cvar95} higherGreen />
+              <CompRow label="CVaR (99%)" a={`${sA.cvar99}%`} b={`${sB.cvar99}%`} av={sA.cvar99} bv={sB.cvar99} higherGreen />
             </tbody>
           </table>
         </div>
@@ -665,7 +686,7 @@ function RiskSection({ pfA, pfB, srcA, srcB, varDays, setVarDays, getSlice }: {
               <CompRow label="Tracking Error" a={`${mA.trackingError}%`} b={`${mB.trackingError}%`} av={mA.trackingError} bv={mB.trackingError} higherGreen={false} />
               <CompRow label="R-Squared" a={mA.rSquared.toFixed(2)} b={mB.rSquared.toFixed(2)} av={mA.rSquared} bv={mB.rSquared} higherGreen />
               <SectionHeaderRow title="Drawdown" />
-              <CompRow label="Max Drawdown" a={`${mA.maxDrawdown}%`} b={`${mB.maxDrawdown}%`} av={mA.maxDrawdown} bv={mB.maxDrawdown} higherGreen={false} />
+              <CompRow label="Max Drawdown" a={`${mA.maxDrawdown}%`} b={`${mB.maxDrawdown}%`} av={mA.maxDrawdown} bv={mB.maxDrawdown} higherGreen />
               <CompRow label="Duration" a={`${mA.maxDrawdownDuration}d`} b={`${mB.maxDrawdownDuration}d`} av={mA.maxDrawdownDuration} bv={mB.maxDrawdownDuration} higherGreen={false} />
             </tbody>
           </table>
@@ -947,14 +968,14 @@ function CorrelationMatrixCard({ label, matrix, tag, tagColor }: {
             <tr>
               <th className="px-2 py-2" />
               {matrix.labels.map(l => (
-                <th key={l} className="px-2 py-2 text-slate-400 font-mono font-medium whitespace-nowrap">{l}</th>
+                <th key={l} className="px-2 py-2 text-slate-400 font-mono font-medium max-w-[56px] truncate" title={l}>{l}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {matrix.labels.map((lbl, i) => (
               <tr key={lbl}>
-                <td className="px-2 py-1.5 text-slate-400 font-mono font-medium whitespace-nowrap">{lbl}</td>
+                <td className="px-2 py-1.5 text-slate-400 font-mono font-medium max-w-[56px] truncate" title={lbl}>{lbl}</td>
                 {matrix.data[i].map((val, j) => (
                   <td key={j} className="px-1 py-1">
                     <div className={`w-12 h-8 flex items-center justify-center rounded font-mono text-[10px] font-medium ${getCorrelationColor(val)}`}>

@@ -365,19 +365,11 @@ def import_positions(
             logger.error(f"Import position failed for {sym}: {e}")
             errors.append({"symbol": sym, "error": str(e)})
 
-    # Kick off background yfinance sync for all symbols (non-blocking)
-    import threading
-    def _bg_batch_sync():
-        from app.db.session import SessionLocal
-        bg_db = SessionLocal()
-        try:
-            bg_md = MarketDataService(bg_db)
-            bg_md.batch_sync_instruments(all_symbols)
-        except Exception as e:
-            logger.warning(f"Background batch sync failed: {e}")
-        finally:
-            bg_db.close()
-    threading.Thread(target=_bg_batch_sync, daemon=True).start()
+    # Synchronous price sync: fetch latest prices so the response includes real prices
+    try:
+        md_service.batch_sync_instruments(all_symbols)
+    except Exception as e:
+        logger.warning(f"Batch sync after import failed (non-fatal): {e}")
 
     return {
         "imported": len(created),
