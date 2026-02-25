@@ -6,69 +6,70 @@ Axiome is a professional-grade standalone application for investors. Build, anal
 
 ---
 
-## 🚀 Lancement Rapide (Utilisateur)
+## 🚀 Quick Start (User)
 
-Pour utiliser Axiome immédiatement sans rien installer d'autre :
+To use Axiome immediately without installing additional dependencies:
 
-1. Allez dans l'onglet **[Releases](https://github.com/joshsssn/Axiome-Exe/releases)**.
-2. Téléchargez le fichier Axiome-Setup-v2.0.0.exe (Windows).
-3. Installez et lancez l'application. 
-   *Note : Les profils et portefeuilles sont stockés localement sur votre ordinateur.*
-
----
-
-## 📋 Fonctionnalités
-
-### Gestion de Portefeuilles
-- Créez plusieurs profils utilisateur (style Netflix).
-- Gérez plusieurs portefeuilles par profil avec benchmarks personnalisables.
-- Support multi-devises (USD, EUR).
-
-### Analyses Avancées
-- **Indicateurs de Risque**: Ratios de Sharpe, Sortino, Calmar, Volatilité, Beta, Alpha.
-- **Value at Risk (VaR)**: Niveaux de confiance 95% & 99% et CVaR.
-- **Visualisations**: Graphiques interactifs, heatmap de rendements mensuels, analyse de drawdown.
-
-### Optimisation & Stratégie
-- **Efficient Frontier**: Modèles d'optimisation de Markowitz.
-- **Backtesting**: Validez vos stratégies sur des données historiques réelles.
-- **Stress Test**: Simulez des scénarios de crise (Crise 2008, COVID 2020, Choc de taux).
+1. Go to the **[Releases](https://github.com/joshsssn/Axiome-Exe/releases)** tab.
+2. Download the `Axiome-Setup-v2.0.0.exe` file (Windows).
+3. Install and launch the application.  
+   *Note: Profiles and portfolios are stored locally on your computer.*
 
 ---
 
-## 🛠 Architecture Technique (Développeur)
+## 📋 Features
 
-L'application a été migrée d'une architecture Cloud (FastAPI/Postgres/Docker/Redis) vers une architecture **Desktop autonome** :
+### Portfolio Management
+- Create multiple user profiles (Netflix-style).
+- Manage multiple portfolios per profile with customizable benchmarks.
+- Multi-currency support (USD, EUR).
+
+### Advanced Analytics
+- **Risk Indicators**: Sharpe, Sortino, Calmar ratios, Volatility, Beta, Alpha.
+- **Value at Risk (VaR)**: 95% & 99% confidence levels and CVaR.
+- **Visualizations**: Interactive charts, monthly return heatmaps, drawdown analysis.
+
+### Optimization & Strategy
+- **Efficient Frontier**: Markowitz optimization models.
+- **Backtesting**: Validate strategies using real historical data.
+- **Stress Testing**: Simulate crisis scenarios (2008 Crisis, COVID-2020, Rate Shocks).
+
+---
+
+## 🛠 Technical Architecture (Developer)
+
+The application has been migrated from a Cloud architecture (FastAPI/Postgres/Docker/Redis) to a **standalone desktop architecture**:
 
 - **Frontend**: React 19 + Vite + Tailwind CSS.
 - **Desktop Wrapper**: [Tauri](https://tauri.app/) (Rust).
-- **Backend (Sidecar)**: FastAPI encapsulé avec **PyInstaller**.
-- **Base de données**: SQLite local (auto-géré).
+- **Backend (Sidecar)**: FastAPI encapsulated with **PyInstaller**.
+- **Database**: Local SQLite (self-managed).
 - **Data Science**: Pandas, NumPy, Scikit-learn, PyPortfolioOpt, yfinance.
 
-### Compilation Locale
+### Local Build
 
-Si vous souhaitez build le projet vous-même :
+If you want to build the project yourself:
 
-1. **Backend** :
-   `powershell
+1. **Backend**:
+   ```powershell
    cd API
    python -m venv venv310
    .\venv310\Scripts\activate
    pip install -r requirements.txt
-   `
-2. **Build Sidecar** :
-   `powershell
+   ```
+2. **Build Sidecar**:
+   ```powershell
    .\scripts\build-sidecar.ps1
-   `
-3. **Build Frontend & App** :
-   `powershell
+   ```
+3. **Build Frontend & App**:
+   ```powershell
    cd UI
    npm install
    npm run tauri:build
-   `
+   ```
 
 ---
 
 ## 📄 License
-Ce projet est sous licence MIT.
+
+This project is licensed under the MIT License.
