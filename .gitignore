@@ -55,3 +55,6 @@ UI/src-tauri/binaries/
 
 # Logs
 *.log
+
+# Ignore release notes
+RELEASE_NOTES_v2.0.0.md
